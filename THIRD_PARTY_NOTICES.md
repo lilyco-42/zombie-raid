@@ -16,3 +16,4 @@ govern those parts; our custom license (`LICENSE.md`) covers everything we wrote
 | godot-ohos (HarmonyOS export plugin) | [godothub/godot-ohos](https://github.com/godothub/godot-ohos) | see upstream repo | HarmonyOS/HAP export in CI (downloaded at build time, not committed) |
 
 CC0 = Creative Commons Zero (public domain dedication).
+| coi-serviceworker | [gzuidhof/coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) | MIT (`ci/coi-serviceworker.js`) | enables cross-origin isolation on GitHub Pages so the threaded WASM build runs |

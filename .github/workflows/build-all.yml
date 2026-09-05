@@ -386,9 +386,44 @@ jobs:
           if-no-files-found: error
 
   # ============ 发布: 全绿后逐平台 zip → GitHub Release ============
+  # ============ GitHub Pages: 在线试玩 (coi-serviceworker 注入跨域隔离头) ============
+  pages:
+    name: Deploy Web to GitHub Pages
+    needs: [web]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+      contents: read
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Download web build
+        uses: actions/download-artifact@v4
+        with:
+          name: web
+          path: pages_site
+      - name: Inject coi-serviceworker (Pages 不发 COOP/COEP 头, 用 SW 补)
+        run: |
+          cp ci/coi-serviceworker.js pages_site/
+          sed -i 's|<head>|<head>
+    <script src="coi-serviceworker.js"></script>|' pages_site/index.html
+          grep -A1 "<head>" pages_site/index.html | head -3
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages_site
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
   release:
     name: Publish GitHub Release
-    needs: [windows-x64, windows-arm64, linux-x64, linux-arm64, macos, android, ios, web, harmony]
+    needs: [windows-x64, windows-arm64, linux-x64, linux-arm64, macos, android, ios, web, harmony, pages]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
