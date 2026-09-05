@@ -1,0 +1,42 @@
+[gd_scene load_steps=6 format=3 uid="uid://raidwrld00001"]
+
+[ext_resource type="Script" path="res://raid/scripts/world_raid.gd" id="1_world"]
+[ext_resource type="PackedScene" path="res://Player_Controller/player_character.tscn" id="2_player"]
+[ext_resource type="Script" path="res://raid/scripts/raid_manager.gd" id="3_manager"]
+
+[sub_resource type="Environment" id="raid_env"]
+background_mode = 1
+background_color = Color(0.015, 0.02, 0.04, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.3, 0.35, 0.45, 1)
+ambient_light_energy = 0.4
+tonemap_mode = 2
+glow_enabled = true
+glow_intensity = 0.6
+fog_enabled = true
+fog_light_color = Color(0.04, 0.05, 0.08, 1)
+fog_density = 0.022
+
+[sub_resource type="BoxMesh" id="ground_mesh"]
+
+[node name="WorldRaid" type="Node3D" groups=["World"]]
+script = ExtResource("1_world")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("raid_env")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+light_color = Color(0.65, 0.72, 1, 1)
+light_energy = 0.18
+shadow_enabled = true
+
+[node name="Ground" type="StaticBody3D" parent="."]
+
+[node name="GroundMesh" type="MeshInstance3D" parent="Ground"]
+mesh = SubResource("ground_mesh")
+
+[node name="PlayerInstance" parent="." instance=ExtResource("2_player")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, -26)
+
+[node name="Manager" type="Node" parent="."]
+script = ExtResource("3_manager")

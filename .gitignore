@@ -1,0 +1,12 @@
+# Godot 4+ specific ignores
+.godot/
+
+# Build outputs
+build/
+dist/
+
+# OS junk
+Thumbs.db
+Desktop.ini
+*.tmp
+mono_crash.*.json

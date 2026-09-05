@@ -1,0 +1,435 @@
+name: Build All Platforms
+
+# Godot 全平台导出矩阵(移植自 cute-pet 的 13-job 模式, 见该仓库 docs/CI_BUILD.md):
+#   Windows(x64/arm64) · Linux(x64/arm64) · macOS(universal) · Android(arm64)
+#   · iOS(未签名 ipa) · Web(WASM, 鸿蒙浏览器可直接跑) · HarmonyOS(HAP, godot-ohos)
+#
+# 约定(踩坑教训):
+#   - 每个 job 自己装 Godot + 模板(版本锁 4.7.2, 带缓存), 全部在 ubuntu 交叉导出
+#   - upload-artifact 的 path 相对仓库根(不要被 defaults/run 的 working-directory 骗)
+#   - artifact 目录名 = 平台名, release job 逐目录打包 zip(避免同名冲突)
+#   - 不要用 YAML anchor, GitHub 解析器对它支持不稳
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: 4.7.2
+
+jobs:
+  # ============ 桌面三兄弟: Windows x2 / Linux x2 / macOS ============
+  windows-x64:
+    name: Windows x64
+    runs-on: ubuntu-latest
+    steps: &godot_export_steps
+      - uses: actions/checkout@v4
+      - name: Cache Godot engine + export templates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}
+      - name: Install Godot + export templates
+        run: |
+          mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
+          cd ~/.local/godot
+          if [ ! -f godot ]; then
+            curl -sL -o g.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+            unzip -o -q g.zip && mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" godot
+          fi
+          chmod +x godot
+          if [ ! -d ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable ]; then
+            curl -sL -o /tmp/tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+            unzip -o -q /tmp/tpz -d /tmp
+            mv /tmp/templates ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          fi
+      - name: Import assets
+        run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
+      - name: Export Windows x64
+        run: ~/.local/godot/godot --headless --path . --export-release "Windows x64" build/windows-x64/ZombieRaid.exe
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: build/windows-x64/
+          if-no-files-found: error
+
+  windows-arm64:
+    name: Windows arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}
+      - name: Install Godot + export templates
+        run: |
+          mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
+          cd ~/.local/godot
+          if [ ! -f godot ]; then
+            curl -sL -o g.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+            unzip -o -q g.zip && mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" godot
+          fi
+          chmod +x godot
+          if [ ! -d ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable ]; then
+            curl -sL -o /tmp/tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+            unzip -o -q /tmp/tpz -d /tmp
+            mv /tmp/templates ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          fi
+      - name: Import assets
+        run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
+      - name: Export Windows arm64
+        run: ~/.local/godot/godot --headless --path . --export-release "Windows arm64" build/windows-arm64/ZombieRaid.exe
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-arm64
+          path: build/windows-arm64/
+          if-no-files-found: error
+
+  linux-x64:
+    name: Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}
+      - name: Install Godot + export templates
+        run: |
+          mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
+          cd ~/.local/godot
+          if [ ! -f godot ]; then
+            curl -sL -o g.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+            unzip -o -q g.zip && mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" godot
+          fi
+          chmod +x godot
+          if [ ! -d ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable ]; then
+            curl -sL -o /tmp/tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+            unzip -o -q /tmp/tpz -d /tmp
+            mv /tmp/templates ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          fi
+      - name: Import assets
+        run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
+      - name: Export Linux x86_64
+        run: ~/.local/godot/godot --headless --path . --export-release "Linux x86_64" build/linux-x64/ZombieRaid.x86_64
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: build/linux-x64/
+          if-no-files-found: error
+
+  linux-arm64:
+    name: Linux arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}
+      - name: Install Godot + export templates
+        run: |
+          mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
+          cd ~/.local/godot
+          if [ ! -f godot ]; then
+            curl -sL -o g.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+            unzip -o -q g.zip && mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" godot
+          fi
+          chmod +x godot
+          if [ ! -d ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable ]; then
+            curl -sL -o /tmp/tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+            unzip -o -q /tmp/tpz -d /tmp
+            mv /tmp/templates ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          fi
+      - name: Import assets
+        run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
+      - name: Export Linux arm64
+        run: ~/.local/godot/godot --headless --path . --export-release "Linux arm64" build/linux-arm64/ZombieRaid.aarch64
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: build/linux-arm64/
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}
+      - name: Install Godot + export templates
+        run: |
+          mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
+          cd ~/.local/godot
+          if [ ! -f godot ]; then
+            curl -sL -o g.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+            unzip -o -q g.zip && mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" godot
+          fi
+          chmod +x godot
+          if [ ! -d ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable ]; then
+            curl -sL -o /tmp/tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+            unzip -o -q /tmp/tpz -d /tmp
+            mv /tmp/templates ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          fi
+      - name: Import assets
+        run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
+      - name: Export macOS (unsigned zip)
+        run: ~/.local/godot/godot --headless --path . --export-release "macOS" build/macos/ZombieRaid-macOS.zip
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: build/macos/
+          if-no-files-found: error
+
+  # ============ Android: 临时 keystore 签名, 纯模板打包(免 gradle) ============
+  android:
+    name: Android arm64 (APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}
+      - name: Install Godot + export templates
+        run: |
+          mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
+          cd ~/.local/godot
+          if [ ! -f godot ]; then
+            curl -sL -o g.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+            unzip -o -q g.zip && mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" godot
+          fi
+          chmod +x godot
+          if [ ! -d ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable ]; then
+            curl -sL -o /tmp/tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+            unzip -o -q /tmp/tpz -d /tmp
+            mv /tmp/templates ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          fi
+      - name: Generate CI keystore (throwaway, 不是正式签名)
+        run: |
+          keytool -genkeypair -v -keystore "$GITHUB_WORKSPACE/ci-release.keystore" \
+            -alias zombieraid -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass zombieraid -keypass zombieraid \
+            -dname "CN=Zombie Raid, O=lilyco, C=CN"
+      - name: Export Android APK
+        env:
+          GODOT_ANDROID_KEYSTORE_DEBUG_PATH: ${{ github.workspace }}/ci-release.keystore
+          GODOT_ANDROID_KEYSTORE_DEBUG_USER: zombieraid
+          GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: zombieraid
+          GODOT_ANDROID_KEYSTORE_RELEASE_PATH: ${{ github.workspace }}/ci-release.keystore
+          GODOT_ANDROID_KEYSTORE_RELEASE_USER: zombieraid
+          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: zombieraid
+        run: ~/.local/godot/godot --headless --path . --export-release "Android" build/android/ZombieRaid.apk
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: build/android/
+          if-no-files-found: error
+
+  # ============ iOS: 未签名 ipa(下载后需自行签名/侧载) ============
+  ios:
+    name: iOS arm64 (unsigned)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}
+      - name: Install Godot + export templates
+        run: |
+          mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
+          cd ~/.local/godot
+          if [ ! -f godot ]; then
+            curl -sL -o g.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+            unzip -o -q g.zip && mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" godot
+          fi
+          chmod +x godot
+          if [ ! -d ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable ]; then
+            curl -sL -o /tmp/tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+            unzip -o -q /tmp/tpz -d /tmp
+            mv /tmp/templates ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          fi
+      - name: Import assets
+        run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
+      - name: Export iOS (unsigned ipa)
+        run: ~/.local/godot/godot --headless --path . --export-release "iOS" build/ios/ZombieRaid.ipa
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: build/ios/
+          if-no-files-found: error
+
+  # ============ Web / WASM: 鸿蒙浏览器也能直接跑 ============
+  web:
+    name: Web (WASM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}
+      - name: Install Godot + export templates
+        run: |
+          mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
+          cd ~/.local/godot
+          if [ ! -f godot ]; then
+            curl -sL -o g.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+            unzip -o -q g.zip && mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" godot
+          fi
+          chmod +x godot
+          if [ ! -d ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable ]; then
+            curl -sL -o /tmp/tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+            unzip -o -q /tmp/tpz -d /tmp
+            mv /tmp/templates ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          fi
+      - name: Import assets
+        run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
+      - name: Export Web
+        run: ~/.local/godot/godot --headless --path . --export-release "Web" build/web/index.html
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: build/web/
+          if-no-files-found: error
+
+  # ============ HarmonyOS: godot-ohos 插件 + OHOS SDK (实验性, 允许失败) ============
+  harmony:
+    name: HarmonyOS (HAP, experimental)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}
+      - name: Install Godot + export templates
+        run: |
+          mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
+          cd ~/.local/godot
+          if [ ! -f godot ]; then
+            curl -sL -o g.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+            unzip -o -q g.zip && mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" godot
+          fi
+          chmod +x godot
+          if [ ! -d ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable ]; then
+            curl -sL -o /tmp/tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+            unzip -o -q /tmp/tpz -d /tmp
+            mv /tmp/templates ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          fi
+      - name: Install OHOS SDK
+        id: ohos
+        uses: openharmony-rs/setup-ohos-sdk@v1.0.1
+      - name: Install godot-ohos plugin (自带 OHOS 导出模板)
+        run: |
+          curl -sL -o /tmp/ohos.zip "https://github.com/godothub/godot-ohos/releases/download/4.7/godot-ohos.zip"
+          unzip -o -q /tmp/ohos.zip -d /tmp/ohos_plugin
+          mkdir -p addons
+          if [ -d /tmp/ohos_plugin/godot-ohos ]; then
+            cp -r /tmp/ohos_plugin/godot-ohos addons/
+          else
+            cp -r /tmp/ohos_plugin addons/godot-ohos
+          fi
+          ls -R addons/godot-ohos | head -20
+      - name: Enable plugin in project.godot
+        run: |
+          grep -q "godot-ohos" project.godot || \
+            sed -i 's|\[application\]|[editor_plugins]\nenabled=PackedStringArray("res://addons/godot-ohos/plugin.cfg")\n\n[application]|' project.godot
+          grep -A1 "editor_plugins" project.godot
+      - name: Export HarmonyOS HAP
+        run: |
+          # Deveco/SDK 路径由 setup-ohos-sdk 提供; 插件导出预设走 "HarmonyOS"
+          export OHOS_SDK="${{ steps.ohos.outputs.ohos_sdk_root }}"
+          ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
+          ~/.local/godot/godot --headless --path . --export-release "HarmonyOS" build/harmony/ZombieRaid.hap
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: harmony
+          path: build/harmony/
+          if-no-files-found: error
+
+  # ============ 发布: 全绿后逐平台 zip → GitHub Release ============
+  release:
+    name: Publish GitHub Release
+    needs: [windows-x64, windows-arm64, linux-x64, linux-arm64, macos, android, ios, web, harmony]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Create tag & release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          TAG="v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::Release $TAG already exists, skipping"
+            exit 0
+          fi
+          mkdir -p release_assets
+          for d in dist/*/; do
+            [ -d "$d" ] || continue
+            name=$(basename "$d")
+            (cd "$d" && zip -qr "$GITHUB_WORKSPACE/release_assets/ZombieRaid-${name}.zip" .) || true
+          done
+          ls -la release_assets
+          {
+            echo "## Zombie Raid v${VERSION} — 平台产物"
+            echo "- Windows: x64 / arm64 (.exe)"
+            echo "- Linux: x86_64 / aarch64 (ELF, 内嵌资源)"
+            echo "- macOS: universal x64+arm64 (.zip 内 .app, 未签名 — 首次打开需 xattr -cr)"
+            echo "- Android: arm64 APK (CI 临时 keystore 签名, 可直接安装)"
+            echo "- iOS: arm64 未签名 .ipa (需自签后侧载)"
+            echo "- Web: WASM (解压后本地起静态服务即可玩, 鸿蒙浏览器亦支持)"
+            echo "- HarmonyOS: HAP (实验性, godot-ohos 插件导出)"
+            echo ""
+            echo "操作: WASD 移动 / 左键射击 / R 换弹 / Shift 疾跑 / C 下蹲 / Q·E 侧倾 / V 切视角 / T 手电筒"
+          } > notes.md
+          gh release create "$TAG" release_assets/*.zip \
+            --title "Zombie Raid v${VERSION}" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA"

@@ -1,0 +1,27 @@
+[gd_scene load_steps=4 format=3 uid="uid://z0mb13raid001"]
+
+[ext_resource type="Script" path="res://raid/scripts/zombie.gd" id="1_zscript"]
+[ext_resource type="PackedScene" path="res://assets/kaykit/skeletons/Skeleton_Minion.glb" id="2_zmodel"]
+
+[sub_resource type="CapsuleShape3D" id="zombie_cap"]
+radius = 0.38
+height = 1.5
+
+[node name="Zombie" type="CharacterBody3D" groups=["Target"]]
+collision_layer = 32
+collision_mask = 3
+script = ExtResource("1_zscript")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.78, 0)
+shape = SubResource("zombie_cap")
+
+[node name="Model" type="Node3D" parent="."]
+
+[node name="ModelInstance" parent="Model" instance=ExtResource("2_zmodel")]
+
+[node name="NavAgent" type="NavigationAgent3D" parent="."]
+path_desired_distance = 0.6
+target_desired_distance = 1.0
+path_max_distance = 4.0
+radius = 0.4
