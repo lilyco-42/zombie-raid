@@ -5,6 +5,10 @@
 
 ![platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Android%20%7C%20iOS%20%7C%20Web%20%7C%20HarmonyOS-blue)
 
+## 🎮 网页直接试玩
+
+**https://lilyco-42.github.io/zombie-raid/** （WebAssembly 多线程，首次加载 ~75MB 需等待）
+
 ## 玩法
 
 - **搜 Search**：夜里进死城，摸医疗包、捡枪、收物资（发光箱子）
