@@ -51,7 +51,7 @@ jobs:
       - name: Import assets
         run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
       - name: Export Windows x64
-        run: ~/.local/godot/godot --headless --path . --export-release "Windows x64" build/windows-x64/ZombieRaid.exe
+        run: mkdir -p build/windows-x64 && ~/.local/godot/godot --headless --path . --export-release "Windows x64" build/windows-x64/ZombieRaid.exe
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -87,7 +87,7 @@ jobs:
       - name: Import assets
         run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
       - name: Export Windows arm64
-        run: ~/.local/godot/godot --headless --path . --export-release "Windows arm64" build/windows-arm64/ZombieRaid.exe
+        run: mkdir -p build/windows-arm64 && ~/.local/godot/godot --headless --path . --export-release "Windows arm64" build/windows-arm64/ZombieRaid.exe
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -123,7 +123,7 @@ jobs:
       - name: Import assets
         run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
       - name: Export Linux x86_64
-        run: ~/.local/godot/godot --headless --path . --export-release "Linux x86_64" build/linux-x64/ZombieRaid.x86_64
+        run: mkdir -p build/linux-x64 && ~/.local/godot/godot --headless --path . --export-release "Linux x86_64" build/linux-x64/ZombieRaid.x86_64
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -159,7 +159,7 @@ jobs:
       - name: Import assets
         run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
       - name: Export Linux arm64
-        run: ~/.local/godot/godot --headless --path . --export-release "Linux arm64" build/linux-arm64/ZombieRaid.aarch64
+        run: mkdir -p build/linux-arm64 && ~/.local/godot/godot --headless --path . --export-release "Linux arm64" build/linux-arm64/ZombieRaid.aarch64
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -195,7 +195,7 @@ jobs:
       - name: Import assets
         run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
       - name: Export macOS (unsigned zip)
-        run: ~/.local/godot/godot --headless --path . --export-release "macOS" build/macos/ZombieRaid-macOS.zip
+        run: mkdir -p build/macos && ~/.local/godot/godot --headless --path . --export-release "macOS" build/macos/ZombieRaid-macOS.zip
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -243,7 +243,7 @@ jobs:
           GODOT_ANDROID_KEYSTORE_RELEASE_PATH: ${{ github.workspace }}/ci-release.keystore
           GODOT_ANDROID_KEYSTORE_RELEASE_USER: zombieraid
           GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: zombieraid
-        run: ~/.local/godot/godot --headless --path . --export-release "Android" build/android/ZombieRaid.apk
+        run: mkdir -p build/android && ~/.local/godot/godot --headless --path . --export-release "Android" build/android/ZombieRaid.apk
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -281,7 +281,7 @@ jobs:
       - name: Import assets
         run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
       - name: Export iOS (unsigned ipa)
-        run: ~/.local/godot/godot --headless --path . --export-release "iOS" build/ios/ZombieRaid.ipa
+        run: mkdir -p build/ios && ~/.local/godot/godot --headless --path . --export-release "iOS" build/ios/ZombieRaid.ipa
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -318,7 +318,7 @@ jobs:
       - name: Import assets
         run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
       - name: Export Web
-        run: ~/.local/godot/godot --headless --path . --export-release "Web" build/web/index.html
+        run: mkdir -p build/web && ~/.local/godot/godot --headless --path . --export-release "Web" build/web/index.html
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -377,7 +377,7 @@ jobs:
           # Deveco/SDK 路径由 setup-ohos-sdk 提供; 插件导出预设走 "HarmonyOS"
           export OHOS_SDK="${{ steps.ohos.outputs.ohos_sdk_root }}"
           ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
-          ~/.local/godot/godot --headless --path . --export-release "HarmonyOS" build/harmony/ZombieRaid.hap
+          mkdir -p build/harmony && ~/.local/godot/godot --headless --path . --export-release "OpenHarmony" build/harmony/ZombieRaid.hap
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
