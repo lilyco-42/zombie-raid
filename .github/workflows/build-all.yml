@@ -262,11 +262,11 @@ jobs:
         with:
           path: |
             ~/.local/godot
-            ~/.local/share/godot/export_templates
+            ~/Library/Application Support/Godot/export_templates
           key: godot-${{ runner.os }}-${{ env.GODOT_VERSION }}
       - name: Install Godot + export templates
         run: |
-          mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
+          mkdir -p ~/.local/godot "$HOME/Library/Application Support/Godot/export_templates"
           cd ~/.local/godot
           if [ ! -f godot ]; then
             curl -sL -o g.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
@@ -276,7 +276,7 @@ jobs:
           if [ ! -d ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable ]; then
             curl -sL -o /tmp/tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
             unzip -o -q /tmp/tpz -d /tmp
-            mv /tmp/templates ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+            mv /tmp/templates "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
           fi
       - name: Sanitize + diagnose binary (GH macOS kills unsigned downloads)
         run: |
