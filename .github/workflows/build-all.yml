@@ -453,7 +453,14 @@ jobs:
           for f in dist/linux-arm64/*.aarch64; do cp "$f" release_assets/ZombieRaid-linux-arm64;         done
           for f in dist/android/*.apk;         do cp "$f" release_assets/ZombieRaid-android-arm64.apk;   done
           for f in dist/ios/*.ipa;             do cp "$f" release_assets/ZombieRaid-ios-arm64.ipa;       done
-          for f in dist/harmony/*.hap;         do cp "$f" release_assets/ZombieRaid-harmony.hap;         done
+          for f in dist/harmony/*.hap;         do
+            # The ohos plugin may export an unpacked HAP directory: pack it (HAP = structured zip)
+            if [ -d "$f" ]; then
+              (cd "$f" && zip -qr "$GITHUB_WORKSPACE/release_assets/ZombieRaid-harmony.hap" .)
+            else
+              cp "$f" release_assets/ZombieRaid-harmony.hap
+            fi
+          done
           # macOS: .app bundle must stay inside a zip to survive download
           for f in dist/macos/*.zip;           do cp "$f" release_assets/ZombieRaid-macOS-universal.zip; done
           # Web: multi-file bundle, single unavoidable zip (also playable live on Pages)
