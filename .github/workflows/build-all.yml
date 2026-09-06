@@ -445,11 +445,19 @@ jobs:
             exit 0
           fi
           mkdir -p release_assets
-          for d in dist/*/; do
-            [ -d "$d" ] || continue
-            name=$(basename "$d")
-            (cd "$d" && zip -qr "$GITHUB_WORKSPACE/release_assets/ZombieRaid-${name}.zip" .) || true
-          done
+          # Raw platform executables, renamed per platform (same-name conflict avoided)
+          cp dist/windows-x64/ZombieRaid.exe     release_assets/ZombieRaid-windows-x64.exe
+          cp dist/windows-arm64/ZombieRaid.exe   release_assets/ZombieRaid-windows-arm64.exe
+          cp dist/linux-x64/ZombieRaid.x86_64    release_assets/ZombieRaid-linux-x64
+          cp dist/linux-arm64/ZombieRaid.aarch64 release_assets/ZombieRaid-linux-arm64
+          cp dist/android/ZombieRaid.apk         release_assets/ZombieRaid-android.apk
+          cp dist/ios/ZombieRaid.ipa             release_assets/ZombieRaid-ios.ipa
+          cp dist/harmony/ZombieRaid.hap         release_assets/ZombieRaid-harmony.hap
+          # macOS: .app bundle must stay inside a zip to survive download
+          cp dist/macos/ZombieRaid-macOS.zip     release_assets/ZombieRaid-macOS-universal.zip
+          # Web: multi-file bundle, single unavoidable zip (also playable live on Pages)
+          (cd dist/web && zip -qr "$GITHUB_WORKSPACE/release_assets/ZombieRaid-web.zip" .)
+          chmod +x release_assets/ZombieRaid-linux-*
           ls -la release_assets
           {
             echo "## Zombie Raid v${VERSION} — 平台产物"
@@ -463,7 +471,7 @@ jobs:
             echo ""
             echo "操作: WASD 移动 / 左键射击 / R 换弹 / Shift 疾跑 / C 下蹲 / Q·E 侧倾 / V 切视角 / T 手电筒"
           } > notes.md
-          gh release create "$TAG" release_assets/*.zip \
+          gh release create "$TAG" release_assets/* \
             --title "Zombie Raid v${VERSION}" \
             --notes-file notes.md \
             --target "$GITHUB_SHA"
