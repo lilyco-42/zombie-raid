@@ -287,8 +287,22 @@ jobs:
           ~/.local/godot/godot --version
       - name: Import assets
         run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
-      - name: Export iOS (unsigned ipa via Xcode)
-        run: mkdir -p build/ios && ~/.local/godot/godot --headless --path . --export-release "iOS" build/ios/ZombieRaid.ipa
+      - name: Export iOS Xcode project (archive step allowed to fail)
+        run: |-
+          mkdir -p build/ios
+          ~/.local/godot/godot --headless --path . --export-release "iOS" build/ios/ZombieRaid.ipa || true
+          find build/ios -maxdepth 2 -name "*.xcodeproj" | head -3
+      - name: Archive unsigned ipa (CODE_SIGNING_ALLOWED=NO)
+        run: |
+          set -e
+          PROJ=$(find build/ios -maxdepth 2 -name "*.xcodeproj" | head -1)
+          test -n "$PROJ" || { echo "no xcodeproj produced"; exit 1; }
+          SCHEME=$(basename "$PROJ" .xcodeproj)
+          xcodebuild -project "$PROJ" -scheme "$SCHEME" -configuration Release             -destination 'generic/platform=iOS' -archivePath build/ios/ZombieRaid.xcarchive archive             CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" 2>&1 | tail -4
+          mkdir -p build/ios/Payload
+          cp -r build/ios/ZombieRaid.xcarchive/Products/Applications/*.app build/ios/Payload/
+          (cd build/ios && zip -qry ZombieRaid-unsigned.ipa Payload && rm -rf Payload)
+          ls -la build/ios/
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
