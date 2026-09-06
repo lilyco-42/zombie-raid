@@ -445,16 +445,17 @@ jobs:
             exit 0
           fi
           mkdir -p release_assets
-          # Raw platform executables, renamed per platform (same-name conflict avoided)
-          cp dist/windows-x64/ZombieRaid.exe     release_assets/ZombieRaid-windows-x64.exe
-          cp dist/windows-arm64/ZombieRaid.exe   release_assets/ZombieRaid-windows-arm64.exe
-          cp dist/linux-x64/ZombieRaid.x86_64    release_assets/ZombieRaid-linux-x64
-          cp dist/linux-arm64/ZombieRaid.aarch64 release_assets/ZombieRaid-linux-arm64
-          cp dist/android/ZombieRaid.apk         release_assets/ZombieRaid-android.apk
-          cp dist/ios/ZombieRaid.ipa             release_assets/ZombieRaid-ios.ipa
-          cp dist/harmony/ZombieRaid.hap         release_assets/ZombieRaid-harmony.hap
+          shopt -s nullglob
+          # Raw platform executables, renamed per platform (globs fail loudly if a build artifact is missing)
+          for f in dist/windows-x64/*.exe;     do cp "$f" release_assets/ZombieRaid-windows-x64.exe;     done
+          for f in dist/windows-arm64/*.exe;   do cp "$f" release_assets/ZombieRaid-windows-arm64.exe;   done
+          for f in dist/linux-x64/*.x86_64;    do cp "$f" release_assets/ZombieRaid-linux-x86_64;        done
+          for f in dist/linux-arm64/*.aarch64; do cp "$f" release_assets/ZombieRaid-linux-arm64;         done
+          for f in dist/android/*.apk;         do cp "$f" release_assets/ZombieRaid-android-arm64.apk;   done
+          for f in dist/ios/*.ipa;             do cp "$f" release_assets/ZombieRaid-ios-arm64.ipa;       done
+          for f in dist/harmony/*.hap;         do cp "$f" release_assets/ZombieRaid-harmony.hap;         done
           # macOS: .app bundle must stay inside a zip to survive download
-          cp dist/macos/ZombieRaid-macOS.zip     release_assets/ZombieRaid-macOS-universal.zip
+          for f in dist/macos/*.zip;           do cp "$f" release_assets/ZombieRaid-macOS-universal.zip; done
           # Web: multi-file bundle, single unavoidable zip (also playable live on Pages)
           (cd dist/web && zip -qr "$GITHUB_WORKSPACE/release_assets/ZombieRaid-web.zip" .)
           chmod +x release_assets/ZombieRaid-linux-*
