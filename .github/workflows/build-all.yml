@@ -254,7 +254,7 @@ jobs:
   # ============ iOS: 未签名 ipa(下载后需自行签名/侧载) ============
   ios:
     name: iOS arm64 (unsigned)
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -269,8 +269,8 @@ jobs:
           mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
           cd ~/.local/godot
           if [ ! -f godot ]; then
-            curl -sL -o g.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
-            unzip -o -q g.zip && mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" godot
+            curl -sL -o g.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
+            unzip -o -q g.zip && cp "Godot_v${GODOT_VERSION}-stable_macos.universal/Godot.app/Contents/MacOS/Godot" godot
           fi
           chmod +x godot
           if [ ! -d ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable ]; then
@@ -280,7 +280,7 @@ jobs:
           fi
       - name: Import assets
         run: ~/.local/godot/godot --headless --path . --import 2>&1 | grep -E "ERROR" || true
-      - name: Export iOS (unsigned ipa)
+      - name: Export iOS (unsigned ipa via Xcode)
         run: mkdir -p build/ios && ~/.local/godot/godot --headless --path . --export-release "iOS" build/ios/ZombieRaid.ipa
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -390,7 +390,7 @@ jobs:
   pages:
     name: Deploy Web to GitHub Pages
     needs: [web]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -423,7 +423,7 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: [windows-x64, windows-arm64, linux-x64, linux-arm64, macos, android, ios, web, harmony, pages]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
