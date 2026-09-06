@@ -15,9 +15,9 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 [application]
 
 config/name="Zombie Raid"
-run/main_scene="res://raid/scenes/world_raid.tscn"
+run/main_scene="res://game/scenes/world_raid.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
-config/icon="res://Title.png"
+config/icon="res://assets/icon.svg"
 
 [filesystem]
 
@@ -177,8 +177,8 @@ textures/vram_compression/import_etc2_astc=true
 
 [autoload]
 
-Stash="*res://raid/scripts/stash.gd"
-Sfx="*res://raid/scripts/sfx.gd"
+Stash="*res://game/scripts/stash.gd"
+Sfx="*res://game/scripts/sfx.gd"
 
 [input_devices]
 

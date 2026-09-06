@@ -9,10 +9,10 @@ func _check(name: String, ok: bool) -> void:
 		fails += 1
 
 func _initialize() -> void:
-	var player: CharacterBody3D = load("res://Player_Controller/player_character.tscn").instantiate()
+	var player: CharacterBody3D = load("res://vendor/Player_Controller/player_character.tscn").instantiate()
 	root.add_child(player)
 	player.add_to_group("player")
-	var avatar: Node3D = load("res://raid/scripts/player_avatar.gd").new()
+	var avatar: Node3D = load("res://game/scripts/player_avatar.gd").new()
 	player.add_child(avatar)
 	_run.call_deferred(player, avatar)
 
@@ -31,25 +31,23 @@ func _run(player: CharacterBody3D, avatar: Node3D) -> void:
 	await process_frame
 	_check("TP: mouse orbits character root", absf(player.global_rotation.y - yaw_before) > 0.05)
 
-	# --- 2) TP->FP sync: camera forward matches body facing, no snap ---
-	var body_yaw: float = avatar.body_pivot.rotation.y
-	var want_facing := Vector3(sin(player.global_rotation.y + body_yaw), 0.0, cos(player.global_rotation.y + body_yaw))
+	# --- 2) TP->FP sync: view snaps to the ORBIT yaw (root), PUBG-style ---
+	var want_facing := Vector3(-sin(player.global_rotation.y), 0.0, -cos(player.global_rotation.y))
 	avatar.fp_mode = true
 	avatar._apply_mode()
 	await process_frame
-	var cam: Camera3D = player.get_node("%Camera")
+	var cam: Camera3D = avatar.fp_camera  # the template's real FP camera (MainCamera)
 	var fwd := -cam.global_transform.basis.z
 	fwd.y = 0
 	fwd = fwd.normalized()
 	_check("TP->FP sync: camera forward matches body facing", fwd.dot(want_facing) > 0.85)
 
 	# --- 3) Zombie fallback movement without a navmesh (headless never bakes) ---
-	var dummy := Node3D.new()
-	dummy.add_to_group("player")
-	root.add_child(dummy)
-	var zombie: CharacterBody3D = load("res://raid/scenes/zombie.tscn").instantiate()
+	var zombie: CharacterBody3D = load("res://game/scenes/zombie.tscn").instantiate()
 	root.add_child(zombie)
-	dummy.global_position = Vector3(30, 0, 0)
+	# The template player (group "player") sits at the origin; push it away so
+	# the zombie chases instead of melee-locking at zero distance
+	player.global_position = Vector3(30, 0, 0)
 	zombie.global_position = Vector3.ZERO
 	await process_frame
 	zombie.state = 2  # State.CHASE
@@ -57,8 +55,8 @@ func _run(player: CharacterBody3D, avatar: Node3D) -> void:
 	while frames < 90:
 		await physics_frame
 		frames += 1
-	var moved := zombie.global_position.length()
-	_check("Zombie fallback: moves toward player without navmesh", moved > 1.0)
+	var horizontal := Vector3(zombie.global_position.x, 0, zombie.global_position.z).length()
+	_check("Zombie fallback: moves toward player without navmesh", horizontal > 1.0)
 
 	print("RESULT: %s (%d fails)" % ["OK" if fails == 0 else "FAILED", fails])
 	quit(1 if fails > 0 else 0)

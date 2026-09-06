@@ -9,7 +9,7 @@ func _initialize() -> void:
 	if not root.has_node("Sfx"):
 		var sfx := Node.new()
 		sfx.name = "Sfx"
-		sfx.set_script(load("res://raid/scripts/sfx.gd"))
+		sfx.set_script(load("res://game/scripts/sfx.gd"))
 		root.add_child(sfx)
 	_run.call_deferred()
 
@@ -38,8 +38,8 @@ func _run() -> void:
 	dummy.global_position = Vector3(0, 0, 8)
 
 	# Spitter at the origin (default Minion model keeps the test light)
-	var spitter: CharacterBody3D = load("res://raid/scenes/zombie.tscn").instantiate()
-	spitter.set_script(load("res://raid/scripts/spitter.gd"))
+	var spitter: CharacterBody3D = load("res://game/scenes/zombie.tscn").instantiate()
+	spitter.set_script(load("res://game/scripts/spitter.gd"))
 	world.add_child(spitter)
 	spitter.global_position = Vector3(0, 0, 0)
 	await process_frame

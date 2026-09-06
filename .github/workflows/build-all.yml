@@ -38,7 +38,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .godot
-          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'raid/**/*.gd', 'raid/**/*.tscn', 'Player_Controller/**/*.gd') }}
+          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'game/**/*.gd', 'game/**/*.tscn', 'vendor/Player_Controller/**/*.gd') }}
       - name: Install Godot + export templates
         run: |
           mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
@@ -85,7 +85,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .godot
-          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'raid/**/*.gd', 'raid/**/*.tscn', 'Player_Controller/**/*.gd') }}
+          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'game/**/*.gd', 'game/**/*.tscn', 'vendor/Player_Controller/**/*.gd') }}
       - name: Install Godot + export templates
         run: |
           mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
@@ -132,7 +132,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .godot
-          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'raid/**/*.gd', 'raid/**/*.tscn', 'Player_Controller/**/*.gd') }}
+          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'game/**/*.gd', 'game/**/*.tscn', 'vendor/Player_Controller/**/*.gd') }}
       - name: Install Godot + export templates
         run: |
           mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
@@ -179,7 +179,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .godot
-          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'raid/**/*.gd', 'raid/**/*.tscn', 'Player_Controller/**/*.gd') }}
+          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'game/**/*.gd', 'game/**/*.tscn', 'vendor/Player_Controller/**/*.gd') }}
       - name: Install Godot + export templates
         run: |
           mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
@@ -226,7 +226,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .godot
-          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'raid/**/*.gd', 'raid/**/*.tscn', 'Player_Controller/**/*.gd') }}
+          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'game/**/*.gd', 'game/**/*.tscn', 'vendor/Player_Controller/**/*.gd') }}
       - name: Install Godot + export templates
         run: |
           mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
@@ -274,7 +274,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .godot
-          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'raid/**/*.gd', 'raid/**/*.tscn', 'Player_Controller/**/*.gd') }}
+          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'game/**/*.gd', 'game/**/*.tscn', 'vendor/Player_Controller/**/*.gd') }}
       - name: Install Godot + export templates
         run: |
           mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
@@ -334,7 +334,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .godot
-          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'raid/**/*.gd', 'raid/**/*.tscn', 'Player_Controller/**/*.gd') }}
+          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'game/**/*.gd', 'game/**/*.tscn', 'vendor/Player_Controller/**/*.gd') }}
       - name: Install Godot + export templates
         run: |
           mkdir -p ~/.local/godot "$HOME/Library/Application Support/Godot/export_templates"
@@ -400,7 +400,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .godot
-          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'raid/**/*.gd', 'raid/**/*.tscn', 'Player_Controller/**/*.gd') }}
+          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'game/**/*.gd', 'game/**/*.tscn', 'vendor/Player_Controller/**/*.gd') }}
       - name: Install Godot + export templates
         run: |
           mkdir -p ~/.local/godot ~/.local/share/godot/export_templates
@@ -449,7 +449,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .godot
-          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'raid/**/*.gd', 'raid/**/*.tscn', 'Player_Controller/**/*.gd') }}
+          key: import-${{ runner.os }}-${{ hashFiles('project.godot', 'assets/**/*.gltf', 'assets/**/*.glb', 'assets/**/*.png', 'assets/**/*.ogg', 'assets/**/*.wav', 'game/**/*.gd', 'game/**/*.tscn', 'vendor/Player_Controller/**/*.gd') }}
       - name: Install Godot + export templates
         run: |
           mkdir -p ~/.local/godot ~/.local/share/godot/export_templates

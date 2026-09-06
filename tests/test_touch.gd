@@ -7,7 +7,7 @@ extends SceneTree
 var fails := 0
 
 func _initialize() -> void:
-	var tc: CanvasLayer = load("res://raid/scripts/touch_controls.gd").new()
+	var tc: CanvasLayer = load("res://game/scripts/touch_controls.gd").new()
 	root.add_child(tc)
 	_run.call_deferred(tc)
 

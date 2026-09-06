@@ -48,6 +48,20 @@
 
 本地导出：装 Godot 4.7.2 + 导出模板后 `godot --headless --path . --export-release "<Preset>" <out>`。
 
+## 项目结构
+
+```
+zombie-raid/
+├── game/            # 玩法层（我们写的）：scripts + scenes
+│   ├── scripts/     # 僵尸AI/管理器/触控/相机/建筑生成/Sfx/Stash...
+│   └── scenes/      # world_raid.tscn（主场景）、zombie.tscn
+├── vendor/          # 开源底座：chafmere FPS 模板（MIT，玩家控制器+武器系统）
+├── assets/          # 开源素材：kaykit（城市/骷髅/冒险者/地牢，CC0）+ sfx
+├── tests/           # headless 回归测试（触控/吐弹/TP导航）
+├── ci/              # CI 附属（coi-serviceworker）
+└── .github/workflows/build-all.yml   # 九平台构建+发布
+```
+
 ## 协议
 
 `LICENSE.md` — **作者保留全部知识产权，任何人可随意商用**（不必署名、不必开源、不必付费）。
