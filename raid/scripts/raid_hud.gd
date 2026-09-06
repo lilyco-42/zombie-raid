@@ -10,6 +10,7 @@ var _extract_box: VBoxContainer
 var _extract_bar: ProgressBar
 var _flash: ColorRect
 var _msg_tween: Tween
+var _clock_label: Label
 
 func _ready() -> void:
 	layer = 10
@@ -24,6 +25,17 @@ func _ready() -> void:
 	_flash.color = Color(0.8, 0.0, 0.0, 0.0)
 	_flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(_flash)
+
+	# Top-center countdown clock
+	_clock_label = _make_label(26)
+	_clock_label.anchor_left = 0.5
+	_clock_label.anchor_right = 0.5
+	_clock_label.offset_left = -300
+	_clock_label.offset_right = 300
+	_clock_label.offset_top = 8
+	_clock_label.offset_bottom = 46
+	_clock_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(_clock_label)
 
 	# Top-left status block
 	var top := VBoxContainer.new()
@@ -120,6 +132,11 @@ func set_health(current: float, maximum: float) -> void:
 	_health_bar.max_value = maximum
 	_health_bar.value = current
 	_health_label.text = "HP  %d / %d" % [int(current), int(maximum)]
+
+func set_clock(text: String, urgent: bool) -> void:
+	_clock_label.text = text
+	_clock_label.add_theme_color_override("font_color",
+		Color(1.0, 0.25, 0.2) if urgent else Color(1, 1, 1))
 
 func set_status(run_loot: int, banked: int, kills: int, quota: int = -1) -> void:
 	if quota >= 0:

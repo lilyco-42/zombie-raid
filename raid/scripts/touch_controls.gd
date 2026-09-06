@@ -32,6 +32,7 @@ var _buttons := [
 	{"action": "crouch", "label": "C", "fx": 0.785, "fy": 0.63, "r": 0.056},
 	{"action": "toggle_view", "label": "V", "fx": 0.935, "fy": 0.40, "r": 0.047},
 	{"action": "flashlight", "label": "T", "fx": 0.800, "fy": 0.44, "r": 0.047},
+	{"action": "scan", "label": "SCAN", "fx": 0.670, "fy": 0.56, "r": 0.045},
 ]
 
 func _ready() -> void:

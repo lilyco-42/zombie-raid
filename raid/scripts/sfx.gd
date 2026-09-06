@@ -121,3 +121,11 @@ func reload_click(pos: Vector3) -> void:
 
 func portal_use() -> void:
 	play_at(DIR + "kenney/doorOpen_000.ogg", Vector3.ZERO, -4.0, 0.05)
+
+
+func scan(pos: Vector3) -> void:
+	play_at(DIR + "kenney/switch_002.ogg", pos, -4.0, 0.15)
+
+func frenzy_stinger() -> void:
+	play_ui(DIR + "kenney/lowFrequency_explosion_001.ogg", -2.0)
+	play_ui(DIR + "kenney/error_004.ogg", -4.0)

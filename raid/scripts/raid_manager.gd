@@ -32,6 +32,8 @@ const WEAPON_COUNT := 4
 const FACILITY_SCRAP_COUNT := 12
 const FACILITY_ZOMBIE_COUNT := 4
 const SCRAP_TINT := Color(1.0, 0.8, 0.35)
+const RUN_LIMIT := 480.0       # seconds until the moon leaves
+const FRENZY_GRACE := 90.0     # frenzy phase before the run is lost
 
 # Zombie variants: weighted random pick at spawn (KayKit skeleton GLBs)
 const VARIANTS := [
@@ -48,6 +50,8 @@ var _run_over := false
 var _in_zone := false
 var _extract_t := 0.0
 var _last_health := 100.0
+var _frenzy := false
+var _scan_cd := 0.0
 
 var world: Node3D
 var player: Node3D
@@ -133,10 +137,39 @@ func _corner_spot(center: Vector3) -> Vector3:
 	var sz := 1.0 if randf() < 0.5 else -1.0
 	return center + Vector3(sx * 4.3, 0, sz * 4.3)
 
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("scan"):
+		_do_scan()
+
+func _do_scan() -> void:
+	if _scan_cd > 0.0 or _run_over:
+		return
+	_scan_cd = 2.0
+	Sfx.scan(player.global_position)
+	for box in get_tree().get_nodes_in_group("loot"):
+		box.scan_ping(player.global_position)
+	for zone in get_tree().get_nodes_in_group("extraction"):
+		zone.scan_ping()
+
 func _process(delta: float) -> void:
 	if player == null or _run_over:
 		return
 	elapsed += delta
+	_scan_cd = maxf(_scan_cd - delta, 0.0)
+	# Loot weight: carrying more slows you down (Lethal Company style)
+	player.weight_factor = clampf(1.0 - float(run_loot) / 2400.0 * 0.35, 0.65, 1.0)
+	# Moon countdown
+	var remaining := RUN_LIMIT - elapsed
+	if remaining > 0.0:
+		hud.set_clock("T-%d:%02d TO SUNRISE" % [int(remaining) / 60, int(remaining) % 60], remaining < 60.0)
+	else:
+		var grace := RUN_LIMIT + FRENZY_GRACE - elapsed
+		hud.set_clock("FRENZY  %d:%02d" % [int(maxf(grace, 0.0)) / 60, int(maxf(grace, 0.0)) % 60], true)
+		if grace <= 0.0:
+			player.get_damage(99999.0)
+			return
+	if elapsed >= RUN_LIMIT and not _frenzy:
+		_trigger_frenzy()
 	# Health bar + damage flash (poll: the template player has no damaged signal)
 	var hp: float = player.current_health
 	if hp < _last_health:
@@ -152,6 +185,13 @@ func _process(delta: float) -> void:
 			_extract_success()
 	else:
 		hud.set_extraction(false, 0.0)
+
+func _trigger_frenzy() -> void:
+	_frenzy = true
+	Sfx.frenzy_stinger()
+	hud.show_message("THE MOON IS LEAVING — EVERYTHING HUNTS YOU", 5.0)
+	for z in get_tree().get_nodes_in_group("zombie"):
+		z.frenzy()
 
 func _difficulty() -> float:
 	return clampf(elapsed / RAMP_SECONDS, 0.0, 1.0)
@@ -214,6 +254,8 @@ func _spawn_zombie_at(pos: Vector3) -> void:
 	zombie.global_position = pos
 	zombie.died.connect(_on_zombie_died)
 	alive += 1
+	if _frenzy:
+		zombie.frenzy()
 	if variant["name"] == "Brute":
 		hud.show_message("A BRUTE is out there...", 1.5)
 

@@ -241,8 +241,8 @@ func _physics_process(_delta: float) -> void:
 	# As good practice, you should replace UI actions with custom gameplay actions.
 	var input_dir = Input.get_vector("left", "right", "up", "down")
 	var direction = (transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
-	velocity.x = move_toward(velocity.x, direction.x * _speed, _acceleration*_delta)
-	velocity.z = move_toward(velocity.z, direction.z * _speed, _acceleration*_delta)
+	velocity.x = move_toward(velocity.x, direction.x * _speed * weight_factor, _acceleration*_delta)
+	velocity.z = move_toward(velocity.z, direction.z * _speed * weight_factor, _acceleration*_delta)
 	
 	move_and_slide()
 
@@ -267,6 +267,9 @@ func on_jump_buffer_timeout()->void:
 
 
 # --- Raid survival: health & damage (zombies call get_damage) ---
+## 1.0 = unburdened; the raid manager lowers it as carried loot grows
+var weight_factor: float = 1.0
+
 signal player_died
 
 @export var max_health: float = 100.0

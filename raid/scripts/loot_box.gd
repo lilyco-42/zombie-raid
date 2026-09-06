@@ -16,6 +16,7 @@ var _model: Node3D
 var _t := randf() * TAU
 
 func _ready() -> void:
+	add_to_group("loot")
 	collision_layer = 0
 	collision_mask = 2  # player layer
 	var cs := CollisionShape3D.new()
@@ -67,3 +68,27 @@ func _tint_model(color: Color) -> void:
 				tinted.emission_enabled = true
 				tinted.emission = color * 0.4
 			mi.set_surface_override_material(i, tinted)
+
+
+func scan_ping(player_pos: Vector3) -> void:
+	## Scanner pulse: float a value+distance tag above the crate for a few seconds
+	if kind == "medkit":
+		return  # medkits stay subtle
+	var dist := int(global_position.distance_to(player_pos))
+	var label := Label3D.new()
+	label.text = "$%d  |  %dm" % [loot_value, dist]
+	label.font_size = 42
+	label.pixel_size = 0.006
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.modulate = Color(1.0, 0.85, 0.3)
+	label.outline_size = 10
+	add_child(label)
+	label.position.y = 1.6
+	var t := create_tween()
+	t.tween_interval(3.0)
+	t.tween_property(label, "modulate:a", 0.0, 0.8)
+	t.tween_callback(label.queue_free)
+	if _model:
+		var pulse := create_tween()
+		pulse.tween_property(_model, "scale", _model.scale * 1.25, 0.15)
+		pulse.tween_property(_model, "scale", _model.scale, 0.35)

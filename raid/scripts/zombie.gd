@@ -37,6 +37,7 @@ var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 var anim: AnimationPlayer
 
 func _ready() -> void:
+	add_to_group("zombie")
 	health = max_health
 	home_position = global_position
 	_apply_model()
@@ -263,3 +264,15 @@ func _tint_model_undead() -> void:
 			if tinted is BaseMaterial3D:
 				tinted.albedo_color = tint
 			mi.set_surface_override_material(i, tinted)
+
+
+func frenzy() -> void:
+	## Moon-departure frenzy: faster, relentless, already knows where you are
+	if state == State.DEAD:
+		return
+	walk_speed *= 1.5
+	run_speed *= 1.6
+	health = minf(health + 20.0, max_health * 1.5)
+	state = State.CHASE
+	if anim:
+		anim.speed_scale = 1.15

@@ -8,6 +8,7 @@ signal player_exited
 const RADIUS := 2.6
 
 func _ready() -> void:
+	add_to_group("extraction")
 	collision_layer = 0
 	collision_mask = 2
 
@@ -72,3 +73,20 @@ func _on_body_entered(body: Node3D) -> void:
 func _on_body_exited(body: Node3D) -> void:
 	if body.is_in_group("player"):
 		player_exited.emit()
+
+
+func scan_ping() -> void:
+	## Scanner pulse: tag the extraction beam for a few seconds
+	var label := Label3D.new()
+	label.text = "EXTRACTION"
+	label.font_size = 48
+	label.pixel_size = 0.006
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.modulate = Color(0.2, 1.0, 0.45)
+	label.outline_size = 10
+	add_child(label)
+	label.position.y = 10.5
+	var t := create_tween()
+	t.tween_interval(3.0)
+	t.tween_property(label, "modulate:a", 0.0, 0.8)
+	t.tween_callback(label.queue_free)
