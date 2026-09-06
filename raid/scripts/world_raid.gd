@@ -5,6 +5,7 @@ extends Node3D
 const CityBuilderScript := preload("res://raid/scripts/city_builder.gd")
 const AvatarScript := preload("res://raid/scripts/player_avatar.gd")
 const DungeonBuilderScript := preload("res://raid/scripts/dungeon_builder.gd")
+const TouchControlsScript := preload("res://raid/scripts/touch_controls.gd")
 
 @onready var player: CharacterBody3D = $PlayerInstance
 @onready var manager: Node = $Manager
@@ -14,6 +15,11 @@ func _ready() -> void:
 	var avatar: Node3D = AvatarScript.new()
 	avatar.name = "PlayerAvatar"
 	player.add_child(avatar)
+	if DisplayServer.is_touchscreen_available():
+		var touch := CanvasLayer.new()
+		touch.name = "TouchControls"
+		touch.set_script(TouchControlsScript)
+		add_child(touch)
 	var ambient := Sfx.make_loop_ui(Sfx.DIR + "kenney/spaceEngineLow_002.ogg", -22.0)
 	if ambient:
 		add_child(ambient)
