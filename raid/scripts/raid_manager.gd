@@ -6,6 +6,8 @@ extends Node
 ## - Restarts the raid scene after success/failure
 
 const ZombieScene := preload("res://raid/scenes/zombie.tscn")
+const SpitterScript := preload("res://raid/scripts/spitter.gd")
+const SPITTER_MODEL := "res://assets/kaykit/skeletons/Skeleton_Mage.glb"
 const LootBoxScript := preload("res://raid/scripts/loot_box.gd")
 const ExtractionZoneScript := preload("res://raid/scripts/extraction_zone.gd")
 const HUDScript := preload("res://raid/scripts/raid_hud.gd")
@@ -31,6 +33,7 @@ const MEDKIT_COUNT := 3
 const WEAPON_COUNT := 4
 const FACILITY_SCRAP_COUNT := 12
 const FACILITY_ZOMBIE_COUNT := 4
+const FACILITY_SPITTERS := 3   # of the facility residents, these spit acid
 const SCRAP_TINT := Color(1.0, 0.8, 0.35)
 const RUN_LIMIT := 480.0       # seconds until the moon leaves
 const FRENZY_GRACE := 90.0     # frenzy phase before the run is lost
@@ -106,13 +109,22 @@ func _setup_facility(dungeon: Dictionary) -> void:
 		spawned += 1
 	# A few residents already inside
 	var zombies_placed := 0
+	var spitters_placed := 0
+	var spitter_announced := false
 	for cell in spots:
 		if zombies_placed >= FACILITY_ZOMBIE_COUNT:
 			break
 		var pos: Vector3 = cell
 		if pos.distance_to(dungeon["entrance"]) < CELL_CLEARANCE * 2.0:
 			continue
-		_spawn_zombie_at(pos + Vector3(randf_range(-1.5, 1.5), 0.2, randf_range(-1.5, 1.5)))
+		if spitters_placed < FACILITY_SPITTERS:
+			_spawn_spitter_at(pos + Vector3(randf_range(-1.5, 1.5), 0.2, randf_range(-1.5, 1.5)))
+			spitters_placed += 1
+			if not spitter_announced:
+				spitter_announced = true
+				hud.show_message("Something spits in the dark...", 2.0)
+		else:
+			_spawn_zombie_at(pos + Vector3(randf_range(-1.5, 1.5), 0.2, randf_range(-1.5, 1.5)))
 		zombies_placed += 1
 
 const CELL_CLEARANCE := 10.0
@@ -241,6 +253,21 @@ func _spawn_zombie() -> void:
 	else:
 		chosen = spawn_points[randi() % spawn_points.size()]
 	_spawn_zombie_at(chosen.global_position + Vector3(randf_range(-1.5, 1.5), 0.2, randf_range(-1.5, 1.5)))
+
+func _spawn_spitter_at(pos: Vector3) -> void:
+	var spitter: CharacterBody3D = ZombieScene.instantiate()
+	spitter.set_script(SpitterScript)
+	spitter.model_path = SPITTER_MODEL
+	spitter.max_health = 45.0
+	spitter.walk_speed = 1.3
+	spitter.run_speed = 3.4
+	spitter.attack_damage = 12.0
+	spitter.body_height = 1.75
+	spitter.tint = Color(0.75, 0.6, 1.0)
+	world.add_child(spitter)
+	spitter.global_position = pos
+	spitter.died.connect(_on_zombie_died)
+	alive += 1
 
 func _spawn_zombie_at(pos: Vector3) -> void:
 	var variant := _pick_variant()

@@ -129,3 +129,7 @@ func scan(pos: Vector3) -> void:
 func frenzy_stinger() -> void:
 	play_ui(DIR + "kenney/lowFrequency_explosion_001.ogg", -2.0)
 	play_ui(DIR + "kenney/error_004.ogg", -4.0)
+
+
+func spit(pos: Vector3) -> void:
+	play_at(DIR + "kenney/slime_001.ogg", pos, -4.0, 0.15)
