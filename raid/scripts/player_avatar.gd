@@ -1,8 +1,9 @@
 extends Node3D
 ## Third-person avatar: KayKit Rogue_Hooded body + over-the-shoulder camera.
-## V toggles FP/TP. In TP we mirror the (hidden) FP camera's yaw/pitch onto
-## the rig, so lean/crouch/sprint from the template all keep working, and the
-## body plays KayKit locomotion animations driven by the player's velocity.
+## V toggles FP/TP. TP is PUBG-style: the mouse ORBITS the camera around the
+## character (the character body does not spin with the mouse); the body faces
+## its movement direction, or the aim direction while firing. Switching back
+## to FP re-syncs the template's camera_rotation so the view never jumps.
 
 const MODEL := "res://assets/kaykit/adventurers/Rogue_Hooded.glb"
 const BODY_HEIGHT := 1.8
@@ -23,6 +24,20 @@ var body_anim: AnimationPlayer
 var arm: SpringArm3D
 var pivot: Node3D
 var torch: SpotLight3D
+var tp_orbit_mouse_sens := 0.0022
+
+func _input(event: InputEvent) -> void:
+	## TP: intercept mouse motion BEFORE the template's player._input so the
+	## character root only orbits the camera (yaw) and the hidden FP camera
+	## pitches; the visible body never spins with the mouse.
+	if fp_mode:
+		return
+	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
+		player.rotate_y(-event.relative.x * tp_orbit_mouse_sens)
+		# Template convention: pitch = -camera_rotation.y (matches camera_look)
+		player.camera_rotation.y = clampf(player.camera_rotation.y + event.relative.y * tp_orbit_mouse_sens, -1.5, 1.2)
+		player.camera.rotation.x = -player.camera_rotation.y
+		get_viewport().set_input_as_handled()
 
 func _ready() -> void:
 	player = get_parent()
@@ -97,43 +112,54 @@ func _unhandled_input(event: InputEvent) -> void:
 		Sfx.reload_click(player.global_position)
 
 func _apply_mode() -> void:
+	if fp_mode and not body_pivot.visible:
+		pass
 	body_pivot.visible = not fp_mode
 	if weapons_models:
 		weapons_models.visible = fp_mode
 	if fp_mode:
+		# Leaving TP: re-sync the template camera state to the orbit yaw (sign
+		# per camera_look: camera_rotation.x = -root yaw) so the view never jumps
+		if player and body_pivot:
+			player.camera_rotation.x = wrapf(-player.global_rotation.y, -PI, PI)
+			player.camera_look(Vector2.ZERO)
 		if fp_camera:
 			fp_camera.current = true
 	else:
+		# Entering TP: start the orbit behind the current view
+		if player:
+			player.camera_rotation.x = wrapf(-player.global_rotation.y, -PI, PI)
 		tp_camera.current = true
 
-func _physics_process(_delta: float) -> void:
-	if fp_camera == null:
+func _physics_process(delta: float) -> void:
+	if fp_mode:
 		return
-	var fwd := -fp_camera.global_transform.basis.z
-	var yaw := atan2(-fwd.x, -fwd.z)
-	var pitch := asin(clampf(fwd.y, -1.0, 1.0))
+	# Orbit rig: camera yaw = character root yaw (rotated by mouse in _input)
+	pivot.global_rotation.y = player.global_rotation.y
+	arm.rotation.x = clampf(-player.camera_rotation.y, deg_to_rad(-55), deg_to_rad(55))
+	# Crouch lowers the shoulder
+	var target_h := PIVOT_HEIGHT_CROUCH if player.get("crouched") else PIVOT_HEIGHT
+	pivot.position.y = lerpf(pivot.position.y, target_h, minf(10.0 * delta, 1.0))
+	_animate_body(delta)
 
-	if not fp_mode:
-		pivot.global_rotation = Vector3(0.0, yaw, 0.0)
-		arm.rotation.x = clampf(pitch, deg_to_rad(-60), deg_to_rad(60))
-		# crouch lowers the shoulder
-		var target_h := PIVOT_HEIGHT_CROUCH if player.get("crouched") else PIVOT_HEIGHT
-		pivot.position.y = lerpf(pivot.position.y, target_h, minf(10.0 * _delta, 1.0))
-		_animate_body(fwd, yaw, _delta)
-
-func _animate_body(fwd: Vector3, _yaw: float, delta: float) -> void:
-	if body_pivot == null or body_anim == null:
+func _animate_body(delta: float) -> void:
+	if body_pivot == null:
 		return
-	# Face the camera direction (strafe-style aiming), fallback to velocity
-	var face := Vector3(fwd.x, 0, fwd.z)
-	if face.length_squared() < 0.01:
-		var v := player.velocity
-		face = Vector3(v.x, 0, v.z)
-	if face.length_squared() > 0.01:
-		var target_yaw := atan2(face.x, face.z)  # KayKit models face +Z
-		body_pivot.rotation.y = lerp_angle(body_pivot.rotation.y, target_yaw, minf(12.0 * delta, 1.0))
+	# PUBG facing: body follows MOVEMENT direction; standing still + firing
+	# faces the aim direction; otherwise keeps the last orientation.
+	var hv := Vector3(player.velocity.x, 0, player.velocity.z)
+	var desired_yaw: float
+	if hv.length() > 0.6:
+		desired_yaw = atan2(hv.x, hv.z)
+	elif Input.is_action_pressed("Shoot"):
+		desired_yaw = player.global_rotation.y + PI  # model +Z faces root forward
+	else:
+		desired_yaw = player.global_rotation.y + wrapf(body_pivot.rotation.y, -PI, PI)
+	body_pivot.rotation.y = wrapf(desired_yaw - player.global_rotation.y, -PI, PI)
 
-	var speed := Vector3(player.velocity.x, 0, player.velocity.z).length()
+	if body_anim == null:
+		return
+	var speed := hv.length()
 	var next := "Idle"
 	if not player.is_on_floor():
 		next = "Jump_Idle"

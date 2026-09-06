@@ -161,7 +161,19 @@ func _add_blocks(world: Node3D) -> Array:
 		var building: String = BUILDINGS[randi() % BUILDINGS.size()]
 		var yaw: float = (PI * 0.5) * float(randi() % 4)
 		var bpos := center + Vector3(randf_range(-0.8, 0.8), 0, randf_range(-0.8, 0.8))
-		_place(world, building, bpos, yaw)
+		# Normalize: scale kit buildings to a believable 6-10m height, keeping
+		# the footprint inside the block (raw kit scales vary wildly)
+		var binst := _place(world, building, bpos, yaw, false)
+		if binst:
+			var box := _aabb_of(binst)
+			if box.size.y > 0.1:
+				var s := randf_range(6.0, 10.0) / box.size.y
+				var footprint := maxf(box.size.x, box.size.z) * s
+				if footprint > 9.5:
+					s *= 9.5 / footprint
+				binst.scale = Vector3.ONE * s
+			for mi in binst.find_children("*", "MeshInstance3D", true, false):
+				mi.create_trimesh_collision()
 		# Scatter props around the building
 		var prop_count := 3 + randi() % 4
 		for i in prop_count:
@@ -176,6 +188,18 @@ func _add_blocks(world: Node3D) -> Array:
 	if park_center != Vector3.INF:
 		_place(world, "watertower", park_center, randf() * TAU)
 	return centers
+
+func _scale_building(inst: Node3D) -> void:
+	## KayKit buildings are "bits" scale (~4 m tall): grow them into real
+	## multi-story city blocks; cap the footprint so it stays inside the block.
+	var box := _aabb_of(inst)
+	if box.size.y < 0.5:
+		return
+	var s: float = randf_range(9.0, 14.0) / box.size.y
+	var max_dim: float = maxf(box.size.x, box.size.z)
+	if max_dim * s > 10.0:
+		s = 10.0 / max_dim
+	inst.scale = Vector3(s, s, s)
 
 func _add_cars(world: Node3D) -> void:
 	for c in ROAD_LINES:

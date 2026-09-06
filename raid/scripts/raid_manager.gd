@@ -215,9 +215,11 @@ func _pick_variant() -> Dictionary:
 
 func _run_spawner() -> void:
 	var map_rid: RID = world.get_world_3d().navigation_map
-	# Wait until the navmesh finished baking so agents get valid paths
-	while NavigationServer3D.map_get_iteration_id(map_rid) == 0:
+	# Wait for the navmesh (max 10s); after that zombies fall back to direct steering
+	var waited := 0.0
+	while NavigationServer3D.map_get_iteration_id(map_rid) == 0 and waited < 10.0:
 		await get_tree().create_timer(0.5).timeout
+		waited += 0.5
 	while not _run_over:
 		await get_tree().create_timer(_current_interval()).timeout
 		if _run_over:

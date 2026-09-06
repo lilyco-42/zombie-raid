@@ -29,6 +29,7 @@ var home_position: Vector3
 var _wander_timer := 0.0
 var _attack_timer := 0.0
 var _growl_timer := 0.0
+var _fallback_dir := Vector3.ZERO
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
 @onready var nav_agent: NavigationAgent3D = $NavAgent
@@ -100,7 +101,21 @@ func _physics_process(delta: float) -> void:
 				state = State.CHASE
 	move_and_slide()
 
+func _nav_ready() -> bool:
+	# WASM safety net: if the navmesh never baked, walk directly instead of freezing
+	return NavigationServer3D.map_get_iteration_id(get_world_3d().navigation_map) > 0
+
 func _do_wander(delta: float) -> void:
+	if not _nav_ready():
+		_wander_timer -= delta
+		if _wander_timer <= 0.0:
+			_wander_timer = randf_range(2.0, 4.0)
+			_fallback_dir = Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)).normalized()
+		_play_move_anim(walk_speed, "Walking_A")
+		velocity.x = _fallback_dir.x * walk_speed
+		velocity.z = _fallback_dir.z * walk_speed
+		_face_dir(_fallback_dir, delta)
+		return
 	_wander_timer -= delta
 	if _wander_timer <= 0.0 or nav_agent.is_navigation_finished():
 		_wander_timer = randf_range(3.0, 6.0)
@@ -113,6 +128,15 @@ func _do_wander(delta: float) -> void:
 	_face_dir(dir, delta)
 
 func _do_chase(player: Node3D, delta: float) -> void:
+	if not _nav_ready():
+		var direct := player.global_position - global_position
+		direct.y = 0
+		direct = direct.normalized()
+		_play_move_anim(run_speed, "Running_A")
+		velocity.x = direct.x * run_speed
+		velocity.z = direct.z * run_speed
+		_face_dir(direct, delta)
+		return
 	nav_agent.target_position = player.global_position
 	_play_move_anim(run_speed, "Running_A")
 	var dir := _steer_dir()
@@ -141,11 +165,22 @@ func _do_attack(player: Node3D) -> void:
 	)
 
 func _steer_dir() -> Vector3:
+	# Web fallback: if the navmesh never baked, steer straight at the target
+	# instead of standing still (walls be damned - moving beats statues).
+	if NavigationServer3D.map_get_iteration_id(get_world_3d().navigation_map) == 0:
+		var direct := nav_agent.target_position - global_position
+		direct.y = 0
+		return direct.normalized() if direct.length_squared() > 0.01 else Vector3.ZERO
 	if nav_agent.is_navigation_finished():
 		return Vector3.ZERO
 	var next := nav_agent.get_next_path_position()
 	var dir := next - global_position
 	dir.y = 0
+	if dir.length_squared() < 0.001:
+		# Pathless agent (e.g. unreachable target): head straight for the target
+		var fallback := nav_agent.target_position - global_position
+		fallback.y = 0
+		return fallback.normalized() if fallback.length_squared() > 0.01 else Vector3.ZERO
 	return dir.normalized()
 
 func _face_dir(dir: Vector3, delta: float) -> void:

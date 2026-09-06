@@ -72,4 +72,5 @@ func _setup_navigation() -> void:
 func _bake_navmesh(region: NavigationRegion3D) -> void:
 	await get_tree().physics_frame
 	await get_tree().physics_frame
-	region.bake_navigation_mesh(true)
+	# Sync bake on the web (threaded baking is unreliable there); threaded elsewhere
+	region.bake_navigation_mesh(not OS.has_feature("web"))
