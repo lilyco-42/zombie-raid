@@ -16,8 +16,14 @@ OUT = os.path.join(ROOT, "assets", "fonts", "noto_sc_subset.otf")
 
 
 def glyph_text() -> str:
-    src = open(os.path.join(ROOT, "game", "scripts", "i18n.gd"), encoding="utf-8").read()
-    chars = set(src) | set(string.printable)
+    """扫 game/scripts 下所有 .gd 的字符串字面量 (跳过注释), 新文案自动收录。"""
+    import glob, re
+    chars = set()
+    for path in glob.glob(os.path.join(ROOT, "game", "scripts", "*.gd")):
+        src = open(path, encoding="utf-8").read()
+        for lit in re.findall(r'"((?:[^"\\]|\\.)*)"', src):
+            chars |= set(lit)
+    chars |= set(string.printable)
     chars |= set("，。：；！？—…·、（）《》「」『』“”‘’％＋×－￥")
     chars -= set("\n\r\t")
     return "".join(sorted(chars))

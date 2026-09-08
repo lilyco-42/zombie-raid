@@ -24,6 +24,25 @@ const RELIC_MODELS: Array[String] = [
 	"res://assets/static/vendor/chinese/gramophone.glb",
 ]
 
+## 旧物图鉴: 扫描时浮出的物件铭牌 (名字 · 年代) —— LC 灵魂: 捡起的是一段生活
+const RELIC_TAGS := {
+	"thermos_bottle.glb": "暖水瓶 · 1978",
+	"enamel_mug.glb": "搪瓷缸 · 1983",
+	"tin_can.glb": "铁皮罐头 · 1972",
+	"ration_bundle.glb": "粮票捆 · 1965",
+	"old_letter.glb": "家书 · 1971",
+	"work_badge.glb": "工牌 · 1980",
+	"half_jade.glb": "半玉佩 · 1948",
+	"old_radio.glb": "老收音机 · 1968",
+	"abacus.glb": "算盘 · 1958",
+	"kerosene_lamp.glb": "煤油灯 · 1962",
+	"enamel_spittoon.glb": "搪瓷痰盂 · 1975",
+	"gramophone.glb": "留声机 · 1936",
+}
+
+## Label3D 默认字体无 CJK, 3D 世界文字必须显式挂项目子集字体
+const FONT_ZH := preload("res://assets/fonts/noto_sc_subset.otf")
+
 @export_enum("loot", "medkit", "relic") var kind: String = "loot"
 @export var loot_value: int = 50
 @export var heal_amount: float = 40.0
@@ -31,6 +50,7 @@ const RELIC_MODELS: Array[String] = [
 
 var _model: Node3D
 var _t := randf() * TAU
+var relic_name := ""
 
 func _ready() -> void:
 	add_to_group("loot")
@@ -45,6 +65,7 @@ func _ready() -> void:
 	var model_file := MODEL_LOOT
 	if kind == "relic":
 		model_file = RELIC_MODELS[randi() % RELIC_MODELS.size()]
+		relic_name = String(RELIC_TAGS.get(String(model_file).get_file(), "旧物"))
 	elif kind == "medkit":
 		model_file = MODEL_MEDKIT
 	if ResourceLoader.exists(model_file):
@@ -97,7 +118,12 @@ func scan_ping(player_pos: Vector3) -> void:
 		return  # medkits stay subtle
 	var dist := int(global_position.distance_to(player_pos))
 	var label := Label3D.new()
-	label.text = "$%d  |  %dm" % [loot_value, dist]
+	label.font = FONT_ZH
+	if kind == "relic":
+		label.text = "%s  |  $%d  |  %dm" % [relic_name, loot_value, dist]
+		label.modulate = Color(1.0, 0.78, 0.35)
+	else:
+		label.text = "$%d  |  %dm" % [loot_value, dist]
 	label.font_size = 42
 	label.pixel_size = 0.006
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
