@@ -192,6 +192,36 @@ func _run() -> void:
 		waited += 0.5
 	_check("raid #2 spawns zombies", mgr.mirrored.size() > mirrors_before)
 
+	# ---- admin endpoint: hot-reload from the repo tables (T7) -------------
+	# the spawned server's cwd is this project root, so the repo tables
+	# live at server/content/
+	var sock := StreamPeerTCP.new()
+	var admin_ok := sock.connect_to_host("127.0.0.1", 24566) == OK
+	waited = 0.0
+	while admin_ok and sock.get_status() == StreamPeerTCP.STATUS_CONNECTING and waited < 3.0:
+		sock.poll()  # StreamPeerTCP advances its state machine only on poll()
+		await create_timer(0.1).timeout
+		waited += 0.1
+	admin_ok = admin_ok and sock.get_status() == StreamPeerTCP.STATUS_CONNECTED
+	if admin_ok:
+		sock.put_data("reload server/content\n".to_utf8_buffer())
+		waited = 0.0
+		while waited < 3.0:
+			sock.poll()
+			if sock.get_available_bytes() > 0:
+				break
+			await create_timer(0.1).timeout
+			waited += 0.1
+		var avail := sock.get_available_bytes()
+		var resp := ""
+		if avail > 0:
+			var r := sock.get_partial_data(avail)
+			if r[0] == OK:
+				resp = r[1].get_string_from_utf8()
+		admin_ok = resp.begins_with("ok zombies=")
+	sock.disconnect_from_host()  # StreamPeerTCP has no close()
+	_check("admin reload endpoint", admin_ok)
+
 	net.leave()
 	OS.kill(server_pid)
 	print("ws roundtrip done: %s" % ("ALL PASS" if fails == 0 else "%d FAILED" % fails))

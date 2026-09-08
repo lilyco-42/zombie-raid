@@ -100,6 +100,10 @@ pub struct World {
     /// Persistence seam (README_OPS.md T6). None in most unit tests
     /// (in-memory ledger only); main.rs attaches a SQLite repo.
     pub repo: Option<std::sync::Arc<dyn PlayerRepo>>,
+    /// Hot-reload registry (README_OPS.md T7). None in most unit tests
+    /// (content snapshot stays fixed); main.rs attaches the store whose
+    /// admin endpoint swaps the snapshot mid-raid.
+    store: Option<std::sync::Arc<crate::content_store::ContentStore>>,
 }
 
 impl World {
@@ -143,7 +147,15 @@ impl World {
             content,
             inventory: HashMap::new(),
             repo,
+            store: None,
         }
+    }
+
+    /// Attach the hot-reload registry (README_OPS.md T7). Once attached,
+    /// every tick() pulls the store's current snapshot first, so an
+    /// admin swap takes effect at the next 20 TPS boundary — no restart.
+    pub fn attach_store(&mut self, store: std::sync::Arc<crate::content_store::ContentStore>) {
+        self.store = Some(store);
     }
 
     // ------------------------------------------------------- inspection --
@@ -179,8 +191,10 @@ impl World {
     /// compiler makes you decide whether Self::new resets it.
     pub fn reset(&mut self, seed: u64) {
         let repo = self.repo.take();
+        let store = self.store.take();
         *self = Self::with_content(seed, self.content.clone());
         self.repo = repo; // persistence outlives raids (ledger is not session state)
+        self.store = store; // hot-reload registry outlives raids too
     }
 
     /// Hello handler. A Hello during a live raid is a no-op (the Seed
@@ -393,6 +407,11 @@ impl World {
     /// tick produced: mid-swing DamagePlayer, 1 Hz NetState, paced
     /// ZombieStates snapshots, one-shot RaidFailed.
     pub fn tick(&mut self, dt: f32) -> Vec<S2C> {
+        // hot-reload pull (README_OPS.md T7): adopt the store's current
+        // snapshot before anything consumes the tables this tick
+        if let Some(store) = &self.store {
+            self.content = store.snapshot();
+        }
         let mut out = Vec::new();
         if !self.raid_active {
             return out; // raid over: freeze the world, keep answering pings
@@ -1127,5 +1146,47 @@ mod repo_tests {
         assert!(repo.purchases(2).is_empty());
         assert_eq!(repo.balance(2, "bandage"), 0);
         assert_eq!(repo.balance(2, &w.coin_id()), 0);
+    }
+}
+
+#[cfg(test)]
+mod hotswap_tests {
+    //! T7: admin snapshot swap takes effect at the next tick boundary.
+
+    use super::*;
+    use crate::content_store::ContentStore;
+
+    #[test]
+    fn admin_swap_takes_effect_next_tick() {
+        let store = std::sync::Arc::new(ContentStore::new(std::sync::Arc::new(
+            ContentTables::built_in(),
+        )));
+        let mut w = World::new(42);
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        w.attach_store(store.clone());
+        // swap in a table where the walker (ztype 1) has 999 hp
+        let mut next = ContentTables::built_in();
+        next.zombies[1].max_hp = 999.0;
+        store.swap(std::sync::Arc::new(next));
+        w.tick(1.0 / 20.0); // adopts the new snapshot
+        let id = w.force_spawn(1, [5.0, 0.0, 0.0]);
+        let msgs = w.validate_hit(2, id, 80.0); // lethal to the 60hp walker
+        assert!(
+            !msgs.iter().any(|m| matches!(m, S2C::ZombieDead { .. })),
+            "swapped 999hp walker survives a would-be lethal hit"
+        );
+    }
+
+    #[test]
+    fn no_store_means_fixed_snapshot() {
+        let mut w = World::new(42);
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        w.tick(1.0 / 20.0);
+        let id = w.force_spawn(1, [5.0, 0.0, 0.0]);
+        let msgs = w.validate_hit(2, id, 80.0);
+        assert!(
+            msgs.iter().any(|m| matches!(m, S2C::ZombieDead { .. })),
+            "without a store the boot snapshot rules (60hp walker dies)"
+        );
     }
 }

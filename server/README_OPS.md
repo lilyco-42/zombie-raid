@@ -33,7 +33,7 @@
 - [x] **T4** World 接入内容表（验证标准：现有 16 个测试**一行不改**全绿 = 对拍通过）
 - [x] **T5** 商店与库存协议：`C2S::{BuyItem, RequestShop}` + `S2C::{ShopList, InventoryUpdate, TradeError}` + GDScript `net_codec.gd` 编解码分支 + 新黄金字节测试（**协议变更**）— 服务端权威账本 `inventory: HashMap<pid, HashMap<item, i64>>`，击杀掉落记给 last hitter；所有失败回 TradeError（raid is over / unknown item / not for sale / insufficient coins）
 - [x] **T6** 玩家数据 SQLite：rusqlite(bundled) + 自写编号迁移器（`schema_migrations` 表，第一天就有）+ `PlayerRepo` trait 隔离（10 年可换 PostgreSQL）；表：`inventory(pid,item_id,count)` / `purchases` 流水 — 写穿持久化：击杀掉落与购买在 mutate 时同步落库（data/players.db，不入 git）；跨会话库存恢复等账号系统落地后启用（读 API 已就位）
-- [ ] **T7** 内容热载：`RwLock<Arc<ContentTables>>` 快照交换 + 管理端点重载（不停机换表）
+- [x] **T7** 内容热载：`RwLock<Arc<ContentTables>>` 快照交换 + 管理端点重载（不停机换表）— `content_store.rs`：swap 前先 validate（fail-closed，坏表保持旧快照）；World 每 tick 拉快照，交换在下一个 20TPS 边界生效；管理端点 `127.0.0.1:24566`（仅回环，命令 `reload [dir]` / `status`）；e2e 实测 reload 回 `ok zombies=4 items=4`
 - [ ] **T8** `docs/SERVER_DEV.md` 新增 §11 内容运营与商业化章；联动素材 SOP（改表→校验→CI 对拍→热载）
 
 ## 10 年不变量（改代码前必读）
@@ -46,4 +46,4 @@
 6. 服务端模拟保持纯函数内核：内容表数据进、S2C 出，无隐藏全局状态。
 
 ---
-状态：T1-T6 完成（2026-09-09，cargo 55 全绿 = protocol 24 + server-bin 31 含 repo/persistence 8 新测试；test_ws_codec 32 断言；e2e ws_roundtrip 15 项）。T7-T8 由自动化循环按序推进，全部完成后此行更新为「✅ 看板清空」。
+状态：T1-T7 完成（2026-09-09，cargo 60 全绿 = protocol 24 + server-bin 36 含 store/hotswap 5 新测试；test_ws_codec 32 断言；e2e ws_roundtrip 16 项含商店回环与管理端点实测）。T8 收尾中，全部完成后此行更新为「✅ 看板清空」。

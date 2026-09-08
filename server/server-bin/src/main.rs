@@ -13,6 +13,7 @@
 //! connection task. The broadcast channel carries S2C VALUES — each
 //! connection serializes to its own format at flush time.
 
+mod content_store;
 mod player_repo;
 mod world;
 
@@ -24,6 +25,9 @@ use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::Message;
 
 const SEED: u64 = 42; // TODO: pass via CLI arg / room config
+/// Loopback-only admin listener (README_OPS.md T7 hot-reload).
+/// Commands: `reload [dir]` | `status`, one line per connection.
+const ADMIN_PORT: u16 = 24566;
 
 #[tokio::main]
 async fn main() {
@@ -37,11 +41,39 @@ async fn main() {
             .expect("open data/players.db");
         Arc::new(db)
     };
+    // Hot-reload registry (README_OPS.md T7): the World adopts whatever
+    // snapshot the admin endpoint swaps in, at the next 20 TPS boundary.
+    let store = Arc::new(content_store::ContentStore::new(Arc::new(
+        protocol::content::ContentTables::built_in(),
+    )));
     let world = Arc::new(Mutex::new(world::World::with_repo(
         SEED,
         Arc::new(protocol::content::ContentTables::built_in()),
         repo,
     )));
+    world.lock().unwrap().attach_store(store.clone());
+
+    // Admin listener: loopback only (no auth yet — never expose it).
+    {
+        let store = store.clone();
+        tokio::spawn(async move {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", ADMIN_PORT))
+                .await
+                .unwrap_or_else(|e| panic!("cannot bind admin 127.0.0.1:{ADMIN_PORT}: {e}"));
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { continue };
+                let store = store.clone();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = vec![0u8; 512];
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    let cmd = String::from_utf8_lossy(&buf[..n]).trim().to_string();
+                    let reply = admin_command(&cmd, &store);
+                    let _ = sock.write_all(reply.as_bytes()).await;
+                });
+            }
+        });
+    }
 
     // Authority heartbeat: 20 TPS fixed tick (Minecraft-style), exactly like
     // net.gd _server_tick() on the host today.
@@ -78,6 +110,27 @@ async fn main() {
         let tx = tx.clone();
         let world = Arc::clone(&world);
         tokio::spawn(handle_connection(stream, peer_addr.to_string(), tx, world));
+    }
+}
+
+/// Admin one-shot command handling (README_OPS.md T7). `reload` validates
+/// the new tables BEFORE the swap; any failure keeps the current snapshot
+/// serving (fail-closed).
+fn admin_command(cmd: &str, store: &Arc<content_store::ContentStore>) -> String {
+    if let Some(dir) = cmd.strip_prefix("reload") {
+        let dir = dir.trim();
+        let dir = if dir.is_empty() { "content" } else { dir };
+        match content_store::load_from_dir(std::path::Path::new(dir)) {
+            Ok(tables) => {
+                store.swap(tables);
+                format!("ok zombies={} items={}\n", store.zombie_count(), store.item_count())
+            }
+            Err(e) => format!("err {e}\n"),
+        }
+    } else if cmd == "status" {
+        format!("ok zombies={} items={}\n", store.zombie_count(), store.item_count())
+    } else {
+        "err usage: reload [dir] | status\n".to_string()
     }
 }
 

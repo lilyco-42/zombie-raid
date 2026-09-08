@@ -283,9 +283,10 @@ static func _dec_inventory_update(b: StreamPeerBuffer) -> Dictionary:
 	var item_id := _get_str(b)
 	if item_id == "":
 		return {}
+	# get_u64 reinterprets the raw bit pattern as a 64-bit int, which IS
+	# the i64 two's complement — negative balances decode correctly with
+	# no manual wraparound (a literal 2^64 here cannot even be represented).
 	var count := int(b.get_u64())
-	if count > 0x7fffffffffffffff:  # i64 raw -> GDScript int (two's complement)
-		count -= 0x10000000000000000
 	return {"InventoryUpdate": {"pid": pid, "item_id": item_id, "count": count}}
 
 
