@@ -5,6 +5,12 @@ extends Node
 ## shared seed so every peer builds identical geometry; runtime events
 ## (spawns, kills, pickups, extraction) are RPC'd by the host.
 ##
+## WS mode (_ws_mode): join_game("ws://host:24565") links to the Rust
+## dedicated server instead (docs/SERVER_DEV.md §6 step ③). The raw
+## WebSocketPeer is not a MultiplayerAPI — C2S/S2C JSON dicts flow through
+## the send_* wrappers and _dispatch_s2c; the rpc_* handler bodies are
+## reused so both links share one client-side state machine.
+##
 ## Death of ANY player fails the raid for the team (Lethal Company rule).
 
 signal peer_joined(peer_id: int)
@@ -31,6 +37,7 @@ const RemoteAvatarScript := preload("res://game/scripts/remote_avatar.gd")
 # Link-layer is swappable (docs/SERVER_DEV.md §6 step ①): ENet today,
 # WsTransport (Rust server) plugs in here without touching rpc_* call sites.
 const TransportScript := preload("res://game/scripts/net_transport_enet.gd")
+const WsTransportScript := preload("res://game/scripts/net_transport_ws.gd")
 
 var online := false
 var hosting := false
@@ -40,6 +47,8 @@ var pending_seed := -1          # client: seed to apply on next world load
 var pending_elapsed := 0.0      # client: raid clock to restore when joining late
 var world: Node3D               # registered by world_raid._ready
 var _transport = null           # NetTransport instance while online
+var _ws_mode := false           # linked to the Rust dedicated server (raw WS)
+var _ws_pid := 0                # self-chosen id in WS mode (server-trusted v1)
 
 var _next_net_id := 1
 var _tick_acc := 0.0            # fixed-tick accumulator (server only)
@@ -61,6 +70,7 @@ func _ready() -> void:
 # ---------------------------------------------------------------- lobby ---
 
 func host_game() -> bool:
+	_ws_mode = false
 	_transport = TransportScript.new()
 	var err: int = _transport.start_host(PORT, MAX_PEERS)
 	if err != OK:
@@ -86,6 +96,9 @@ func host_game() -> bool:
 	return true
 
 func join_game(ip: String) -> bool:
+	# ws:// or wss:// links to the Rust dedicated server (WS mode)
+	if ip.begins_with("ws://") or ip.begins_with("wss://"):
+		return _ws_join(ip)
 	var peer := ENetMultiplayerPeer.new()
 	var err := peer.create_client(ip, PORT)
 	if err != OK:
@@ -96,12 +109,30 @@ func join_game(ip: String) -> bool:
 	lobby_changed.emit()
 	return true
 
+func _ws_join(url: String) -> bool:
+	var t = WsTransportScript.new()
+	if t.join(url) != OK:
+		return false
+	_transport = t
+	online = true
+	hosting = false
+	_ws_mode = true
+	# v1 trust model: the client picks its id and the server trusts it
+	# (netcode auth lands with renet in a later step).
+	_ws_pid = 2 + randi() % 998
+	lobby_changed.emit()
+	return true
+
 func leave() -> void:
+	if _ws_mode and _transport != null:
+		_transport.close()
+		_transport = null
 	if multiplayer.multiplayer_peer != null:
 		multiplayer.multiplayer_peer.close()
 	multiplayer.multiplayer_peer = null
 	online = false
 	hosting = false
+	_ws_mode = false
 	raid_active = false
 	pending_seed = -1
 	pending_elapsed = 0.0
@@ -110,9 +141,13 @@ func leave() -> void:
 	lobby_changed.emit()
 
 func is_host() -> bool:
+	if _ws_mode:
+		return false  # the Rust server owns authority in WS mode
 	return online and (not hosting or multiplayer.is_server())
 
 func my_id() -> int:
+	if _ws_mode:
+		return _ws_pid
 	return multiplayer.get_unique_id() if online else 1
 
 func next_net_id() -> int:
@@ -165,11 +200,20 @@ func _on_server_gone() -> void:
 func push_player_state(pos: Vector3, body_yaw: float, speed: float, on_floor: bool, crouch: bool) -> void:
 	if not online:
 		return
+	if _ws_mode:
+		_ws_send({"PlayerState": {"pid": _ws_pid, "pos": [pos.x, pos.y, pos.z],
+			"yaw": body_yaw, "speed": speed, "on_floor": on_floor, "crouch": crouch}})
+		return
 	rpc("rpc_player_state", my_id(), pos, body_yaw, speed, on_floor, crouch)
 
 # ------------------------------------------------------------ per-frame ---
 
 func _process(delta: float) -> void:
+	if _ws_mode:
+		# pump the raw socket even while world == null — the wait overlay
+		# must still receive Seed and (once built) snapshots
+		_ws_pump(delta)
+		return
 	if not online or world == null:
 		return
 	if raid_active and is_host():
@@ -218,7 +262,112 @@ func _broadcast_zombie_states() -> void:
 			yaw, float(code), float(z.get("ztype"))]))
 	rpc("rpc_zombie_states", arr)
 
-# ------------------------------------------------------------ avatars -----
+# ------------------------------------------------------- ws transport -----
+
+func _ws_send(msg: Dictionary) -> void:
+	if _transport != null and _ws_mode:
+		_transport.send_text(JSON.stringify(msg))
+
+func _ws_pump(_delta: float) -> void:
+	if _transport == null:
+		return
+	for line in _transport.poll_texts():
+		var parsed: Variant = JSON.parse_string(line)
+		if parsed is Dictionary:
+			for variant in parsed:
+				_dispatch_s2c(String(variant), parsed[variant])
+		elif parsed is String:
+			# serde serializes unit variants (RaidFailed/ExtractSuccess/
+			# RaidStarted) as bare JSON strings on the wire
+			_dispatch_s2c(parsed, null)
+	if _transport.is_closed():
+		_transport = null
+		_ws_mode = false
+		print("[net] ws server gone")
+		leave()
+
+func _dispatch_s2c(variant: String, d: Variant) -> void:
+	## One S2C JSON frame from the Rust server -> the matching rpc_* body,
+	## so ENet and WS clients share a single state machine.
+	match variant:
+		"Seed":
+			rpc_seed(int(d["seed"]), float(d["elapsed"]))
+		"ZombieStates":
+			rpc_zombie_states(_ws_zombie_states_arr(d))
+		"NetState":
+			rpc_net_state(float(d["elapsed"]), bool(d["frenzy"]))
+		"RaidStarted":
+			rpc_raid_started()
+		"ZombieDead":
+			var p: Array = d["pos"]
+			rpc_zombie_dead(int(d["net_id"]), Vector3(p[0], p[1], p[2]), int(d["drop_value"]))
+		"RemoveBox":
+			var p: Array = d["pos"]
+			rpc_remove_box(Vector3(p[0], p[1], p[2]))
+		"ExtractSuccess":
+			rpc_extract_success()
+		"RaidFailed":
+			rpc_raid_failed()
+		"DamagePlayer":
+			# broadcast channel: a zombie hit YOUR body — ignore other pids
+			if int(d["pid"]) == _ws_pid:
+				rpc_damage_player(float(d["dmg"]))
+		_:
+			print("[net] unknown S2C variant: %s" % variant)
+
+func _ws_zombie_states_arr(d: Dictionary) -> PackedFloat32Array:
+	## Rust sends {"ZombieStates":{"seq":N,"ents":[{id,pos,yaw,anim,ztype}…]}}.
+	## Rebuild the ENet wire shape: [seq, id,x,y,z,yaw,anim,ztype] * N.
+	var arr := PackedFloat32Array()
+	arr.append(float(int(d["seq"])))
+	for e in d["ents"]:
+		var p: Array = e["pos"]
+		arr.append_array(PackedFloat32Array([
+			float(int(e["id"])),
+			float(p[0]), float(p[1]), float(p[2]),
+			float(e["yaw"]),
+			float(int(e["anim"])),
+			float(int(e["ztype"])),
+		]))
+	return arr
+
+# ---- WS send wrappers: the client->server counterparts of the rpc_* ------
+# call sites. In ENet mode they forward to the same rpc (one code path for
+# callers, zero behavior change); in WS mode they emit protocol JSON.
+
+func send_hit_zombie(net_id: int, dmg: float) -> void:
+	if not online:
+		return
+	if _ws_mode:
+		_ws_send({"HitZombie": {"pid": _ws_pid, "net_id": net_id, "dmg": dmg}})
+	else:
+		rpc("rpc_hit_zombie", net_id, dmg)
+
+func send_box_taken(pos: Vector3) -> void:
+	if not online:
+		return
+	if _ws_mode:
+		_ws_send({"BoxTaken": {"pos": [pos.x, pos.y, pos.z]}})
+	else:
+		rpc("rpc_box_taken", pos)
+
+func send_extract(in_zone: bool) -> void:
+	if not online:
+		return
+	if _ws_mode:
+		_ws_send({"ReportExtract": {"in_zone": in_zone}})
+	else:
+		rpc("rpc_report_extract", in_zone)
+
+func send_player_died() -> void:
+	if not online:
+		return
+	if _ws_mode:
+		_ws_send({"ReportPlayerDied": null})
+	else:
+		rpc("rpc_report_player_died")
+
+# ------------------------------------------------------------- avatars ----
 
 func spawn_remote_avatars() -> void:
 	for pid in multiplayer.get_peers():
@@ -265,6 +414,10 @@ func nearest_remote_to(pos: Vector3, max_dist := INF) -> Dictionary:
 func claim_box(pos: Vector3) -> void:
 	## First taker wins: the collector's peer frees the box everywhere.
 	if not online:
+		return
+	if _ws_mode:
+		# the server relays RemoveBox back to everyone (incl. the taker)
+		send_box_taken(pos)
 		return
 	if is_host():
 		_box_taken_local(pos)

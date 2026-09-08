@@ -339,7 +339,7 @@ func Hit_Successful(damage: float, _Direction: Vector3 = Vector3.ZERO, _Position
 	if Net.online and not Net.is_host():
 		# Client: the host owns zombie health — report the hit, play feedback
 		if net_id > 0:
-			Net.rpc("rpc_hit_zombie", net_id, damage)
+			Net.send_hit_zombie(net_id, damage)
 			Sfx.flesh_hit(global_position)
 		return
 	health -= damage

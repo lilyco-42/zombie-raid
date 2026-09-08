@@ -1,12 +1,19 @@
-//! zombie-raid authoritative dedicated server — skeleton (SERVER_DEV.md §6
-//! steps ②/③). Listens on WS :24565 for Godot clients, runs the 20 TPS
-//! authority tick, broadcasts S2C messages as JSON (binary codec lands in
-//! step ③). The ENet LAN path in net.gd stays untouched.
+//! zombie-raid authoritative dedicated server — migration step ③
+//! (SERVER_DEV.md §6). Listens on WS :24565 for Godot clients, runs the
+//! 20 TPS authority tick and broadcasts every S2C the tick produces as
+//! JSON. The ENet LAN path in net.gd stays untouched.
+//!
+//! Wiring: one `Arc<Mutex<World>>` shared by the tick task and every
+//! connection task. Tick task: World::tick(0.05) -> serialize Vec<S2C> ->
+//! broadcast channel. Connection task: inbound C2S -> World::handle ->
+//! broadcast the replies; outbound -> forward channel lines to the socket.
 
 mod world;
 
 use futures_util::{SinkExt, StreamExt};
 use protocol::{C2S, S2C, DEFAULT_PORT};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -15,24 +22,21 @@ const SEED: u64 = 42; // TODO: pass via CLI arg / room config
 #[tokio::main]
 async fn main() {
     let (tx, _rx) = broadcast::channel::<String>(256);
+    let world = Arc::new(Mutex::new(world::World::new(SEED)));
 
     // Authority heartbeat: 20 TPS fixed tick (Minecraft-style), exactly like
     // net.gd _server_tick() on the host today.
     {
         let tx = tx.clone();
+        let world = Arc::clone(&world);
         tokio::spawn(async move {
-            let mut w = world::World::new(SEED);
-            let mut int = tokio::time::interval(std::time::Duration::from_millis(50));
+            let mut int = tokio::time::interval(Duration::from_millis(50));
             int.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 int.tick().await;
-                if let Some(roll) = w.tick() {
-                    let msg = S2C::NetState {
-                        elapsed: w.tick as f32 / 20.0,
-                        frenzy: false,
-                    };
-                    let _ = tx.send(serde_json::to_string(&msg).unwrap());
-                    println!("[tick {:>4}] spawn roll {roll}", w.tick);
+                let msgs = world.lock().unwrap().tick(1.0 / world::TICK_HZ);
+                for m in msgs {
+                    let _ = tx.send(serde_json::to_string(&m).unwrap());
                 }
             }
         });
@@ -52,15 +56,17 @@ async fn main() {
                 continue;
             }
         };
-        let rx = tx.subscribe();
-        tokio::spawn(handle_connection(stream, peer_addr.to_string(), rx));
+        let tx = tx.clone();
+        let world = Arc::clone(&world);
+        tokio::spawn(handle_connection(stream, peer_addr.to_string(), tx, world));
     }
 }
 
 async fn handle_connection(
     stream: tokio::net::TcpStream,
     addr: String,
-    mut rx: broadcast::Receiver<String>,
+    tx: broadcast::Sender<String>,
+    world: Arc<Mutex<world::World>>,
 ) {
     let ws = match tokio_tungstenite::accept_async(stream).await {
         Ok(w) => w,
@@ -70,15 +76,19 @@ async fn handle_connection(
         }
     };
     let (mut sink, mut stream) = ws.split();
+    let mut rx = tx.subscribe();
     println!("[{addr}] connected");
 
-    // Seed handshake first, mirroring rpc_seed: client builds nothing until
-    // it knows the world seed.
-    let hello = serde_json::to_string(&S2C::Seed {
-        seed: SEED,
-        elapsed: 0.0,
-    })
-    .unwrap();
+    // Seed handshake first, mirroring rpc_seed: the client builds nothing
+    // until it knows the world seed, and late joiners restore the clock.
+    let seed = {
+        let w = world.lock().unwrap();
+        S2C::Seed {
+            seed: SEED,
+            elapsed: w.elapsed,
+        }
+    };
+    let hello = serde_json::to_string(&seed).unwrap();
     if sink.send(Message::text(hello)).await.is_err() {
         return;
     }
@@ -87,7 +97,13 @@ async fn handle_connection(
         tokio::select! {
             inbound = stream.next() => match inbound {
                 Some(Ok(Message::Text(t))) => match serde_json::from_str::<C2S>(&t) {
-                    Ok(c2s) => println!("[{addr}] {c2s:?}"),
+                    Ok(c2s) => {
+                        println!("[{addr}] {c2s:?}");
+                        let replies = world.lock().unwrap().handle(&c2s);
+                        for m in replies {
+                            let _ = tx.send(serde_json::to_string(&m).unwrap());
+                        }
+                    }
                     Err(e) => println!("[{addr}] bad message: {e}"),
                 },
                 Some(Ok(_)) => {} // binary/ping: accepted, unused in v1

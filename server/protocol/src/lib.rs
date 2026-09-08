@@ -21,8 +21,10 @@ pub enum C2S {
         on_floor: bool,
         crouch: bool,
     },
-    /// was `rpc_hit_zombie` (server validates rate/damage/range)
-    HitZombie { net_id: u32, dmg: f32 },
+    /// was `rpc_hit_zombie` (server validates rate/damage/range; `pid`
+    /// declares the shooter so the server can attach its last reported
+    /// position — v1 trust model, netcode auth lands later)
+    HitZombie { pid: u32, net_id: u32, dmg: f32 },
     /// was `rpc_box_taken` (claim by position, first taker wins)
     BoxTaken { pos: [f32; 3] },
     /// was `rpc_report_extract`
@@ -55,8 +57,9 @@ pub enum S2C {
     ExtractSuccess,
     /// was `rpc_raid_failed`
     RaidFailed,
-    /// was `rpc_damage_player`
-    DamagePlayer { dmg: f32 },
+    /// was `rpc_damage_player` — `pid` names the target so a broadcast
+    /// channel stays safe (client ignores reports for other pids)
+    DamagePlayer { pid: u32, dmg: f32 },
 }
 
 /// One zombie in the 15Hz snapshot.
@@ -124,7 +127,11 @@ mod tests {
                 on_floor: true,
                 crouch: false,
             },
-            C2S::HitZombie { net_id: 9, dmg: 34.5 },
+            C2S::HitZombie {
+                pid: 2,
+                net_id: 9,
+                dmg: 34.5,
+            },
             C2S::BoxTaken { pos: [0.0, 1.0, 2.0] },
             C2S::ReportExtract { in_zone: true },
             C2S::ReportPlayerDied,
@@ -167,7 +174,7 @@ mod tests {
             S2C::RemoveBox { pos: [4.0, 0.0, 5.0] },
             S2C::ExtractSuccess,
             S2C::RaidFailed,
-            S2C::DamagePlayer { dmg: 12.0 },
+            S2C::DamagePlayer { pid: 2, dmg: 12.0 },
         ];
         for m in msgs {
             let j = serde_json::to_string(&m).unwrap();

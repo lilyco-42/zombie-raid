@@ -463,7 +463,7 @@ func _extract_success() -> void:
 		if Net.is_host():
 			Net.rpc("rpc_extract_success")
 		else:
-			Net.rpc("rpc_report_extract", true)
+			Net.send_extract(true)
 	_end_raid()
 
 func net_extract_success() -> void:
@@ -504,7 +504,7 @@ func _on_player_died() -> void:
 		if Net.is_host():
 			Net.rpc("rpc_raid_failed")
 		else:
-			Net.rpc("rpc_report_player_died")
+			Net.send_player_died()
 	_end_raid()
 
 func net_raid_failed() -> void:

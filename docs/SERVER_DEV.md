@@ -107,21 +107,30 @@ WS 路径用帧头 1 字节消息类型 + 可靠 TCP 自带有序。
 
 ## 6. 迁移路径（四步，每步可独立合入）
 
-1. **抽 transport 接口**（GDScript 侧纯重构，行为不变）：
-   net.gd 内定义 `NetTransport`（`connect/start_host/send_raw/poll/disconnected` 信号），
-   现有 ENet 逻辑包成 `EnetTransport`；rpc_* 收发走接口。
-2. **WsTransport + Rust 服务端骨架**：
-   `server/` Cargo workspace，tokio-tungstenite 接 GDScript `WebSocketPeer`，
-   `protocol` crate 用 serde 定义 §4 的 14 消息（JSON 起步）；
-   丧尸 AI 从 `zombie.gd`/`raid_manager.gd` 移植成 Rust（状态机简单，重逻辑轻表现）；
-   `cargo test` + Godot headless 测试对拍（同一种子 → 同一刷怪序列）。
-3. **二进制化**：事件消息 serde→bincode/postcard（`protocol` crate 加 feature 即可）；
+1. ✅ **抽 transport 接口**（GDScript 侧纯重构，行为不变）：
+   `net_transport.gd` 基类 + `net_transport_enet.gd` 实现；rpc_* 调用点不动。
+2. ✅ **WsTransport + Rust 服务端骨架 + 权威 World 落地**（2026-09-08）：
+   - `server/` Cargo workspace：`protocol` crate（14 消息 serde 枚举 + LCG64 交叉验证）
+     + `server-bin`（tokio-tungstenite WS :24565，`Arc<Mutex<World>>`，20 TPS tick）；
+   - World 权威模拟对齐游戏源码常量：变体表（Runner/Walker/Brute 权重 3/5/2）、
+     刷怪曲线（5.0s→2.2s，max_alive 6→14，360s ramp）、追击/挥击（2.0m 起手、
+     0.4s 落判、1.3s CD）、命中校验（20/s 限频、80m 射程、80 clamp、30% 掉落走 LCG）、
+     团灭时钟（480s frenzy → 570s RaidFailed）；
+   - GDScript 侧：`net_transport_ws.gd`（WebSocketPeer）+ net.gd `_ws_mode`
+     （`join_game("ws://…")` 分支、`_dispatch_s2c` 复用 rpc_* 处理器体、send_* 包装）；
+     **坑**：serde 单变体 S2C 上线是裸字符串（`"RaidFailed"`），泵需双形态解析；
+   - 测试：cargo 15 个 + `tests/test_ws_codec.gd`（18 断言防漂移）
+     + `tests/ws_roundtrip.gd`（真实 Godot 客户端 ↔ 真实服务器全链路）。
+3. **二进制化**（下一步）：事件消息 serde→bincode/postcard（`protocol` crate 加 feature 即可）；
    快照维持 float32 数组；WS 帧内自定义 1 字节类型头。
 4. **两条可选升级线**（互不阻塞，按需启用）：
    - **低延迟线**：gdext 扩展嵌 renet client → UDP + netcode 加密鉴权，
      客户端延迟与加密一步到位（与现有 ENet 同为 UDP，体验对齐）；
    - **WebTransport 线**：服务端加 quinn + web-transport-quinn 监听（BBR 拥塞控制），
      为浏览器端/弱网重连预留——Godot 侧仍走 WS/UDP，不强制迁移。
+
+遗留（不阻塞当前玩法）：箱子/战利品服务端记账（v1 只中继 RemoveBox）、
+地图 SpawnPoint 数据上行（v1 玩家环外刷）、断线会话清理、pid 鉴权。
 
 ## 7. `server/` 目标布局（Cargo workspace）
 
