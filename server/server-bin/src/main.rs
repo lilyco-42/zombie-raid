@@ -83,6 +83,9 @@ async fn handle_connection(
     let (mut sink, mut stream) = ws.split();
     let mut rx = tx.subscribe();
     let mut binary_out = false; // flips on Hello{ver >= 2}
+    // v1 trust model: the client picks its pid; we infer this connection's
+    // pid from its first state/hit report so we can clean up on disconnect.
+    let mut claimed_pid: Option<u32> = None;
     println!("[{addr}] connected");
 
     // Seed handshake first, always as JSON text: it precedes any inbound
@@ -104,23 +107,15 @@ async fn handle_connection(
             inbound = stream.next() => match inbound {
                 Some(Ok(Message::Text(t))) => match serde_json::from_str::<C2S>(&t) {
                     Ok(c2s) => {
-                        if let Some(c2s) = accept(c2s, &addr, &mut binary_out) {
-                            let replies = world.lock().unwrap().handle(&c2s);
-                            for m in replies {
-                                let _ = tx.send(m);
-                            }
-                        }
+                        dispatch(c2s, &addr, &mut binary_out, &mut claimed_pid, &world, &tx)
+                            .await;
                     }
                     Err(e) => println!("[{addr}] bad text message: {e}"),
                 },
                 Some(Ok(Message::Binary(b))) => match protocol::decode_c2s(&b) {
                     Some(c2s) => {
-                        if let Some(c2s) = accept(c2s, &addr, &mut binary_out) {
-                            let replies = world.lock().unwrap().handle(&c2s);
-                            for m in replies {
-                                let _ = tx.send(m);
-                            }
-                        }
+                        dispatch(c2s, &addr, &mut binary_out, &mut claimed_pid, &world, &tx)
+                            .await;
                     }
                     None => println!("[{addr}] bad binary frame ({} bytes)", b.len()),
                 },
@@ -150,10 +145,47 @@ async fn handle_connection(
         }
     }
     println!("[{addr}] disconnected");
+    if let Some(pid) = claimed_pid {
+        world.lock().unwrap().retire_player(pid);
+        println!("[{addr}] retired pid {pid}");
+    }
 }
 
-/// Inbound pre-processing: intercept the binary upgrade handshake (Hello
-/// never reaches the World) and pass everything else through.
+/// Shared inbound path: negotiate the wire upgrade, remember the
+/// connection's claimed pid, hand the message to the World and broadcast
+/// every reply (the Hello restart-Seed included).
+async fn dispatch(
+    c2s: C2S,
+    addr: &str,
+    binary_out: &mut bool,
+    claimed_pid: &mut Option<u32>,
+    world: &Arc<Mutex<world::World>>,
+    tx: &broadcast::Sender<S2C>,
+) {
+    if let Some(c2s) = accept(c2s, addr, binary_out) {
+        if claimed_pid.is_none() {
+            *claimed_pid = claim_pid(&c2s);
+        }
+        let replies = world.lock().unwrap().handle(&c2s);
+        for m in replies {
+            let _ = tx.send(m);
+        }
+    }
+}
+
+/// A client's pid rides on its state/hit reports; the first one claims the
+/// connection identity for disconnect cleanup.
+fn claim_pid(c2s: &C2S) -> Option<u32> {
+    match c2s {
+        C2S::PlayerState { pid, .. } | C2S::HitZombie { pid, .. } => Some(*pid),
+        _ => None,
+    }
+}
+
+/// Inbound pre-processing: the Hello upgrade flips the wire format and
+/// STILL reaches the World — once the previous raid is over, a Hello
+/// restarts it with a fresh seed (World::handle_hello). All else passes
+/// through untouched.
 fn accept(c2s: C2S, addr: &str, binary_out: &mut bool) -> Option<C2S> {
     match c2s {
         C2S::Hello { ver } => {
@@ -161,7 +193,7 @@ fn accept(c2s: C2S, addr: &str, binary_out: &mut bool) -> Option<C2S> {
                 *binary_out = true;
             }
             println!("[{addr}] hello ver={ver} binary_out={binary_out}");
-            None
+            Some(C2S::Hello { ver })
         }
         other => {
             println!("[{addr}] {other:?}");

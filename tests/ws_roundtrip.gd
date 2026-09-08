@@ -131,6 +131,32 @@ func _run() -> void:
 		waited += 0.2
 	_check("RaidFailed roundtrip", failed_flag.v)
 
+	# ---- session lifecycle: rejoin starts raid #2 on a fresh seed ---------
+	net.leave()
+	# back-to-menu: the world goes with the scene, so the reconnect's first
+	# Seed (the old raid's tail state) must NOT trigger a scene reload
+	net.world = null
+	_check("rejoin accepted", net.join_game("ws://127.0.0.1:24565"))
+	# once the socket opens the client sends Hello{ver:2}; the server sees
+	# the raid is over, resets and broadcasts a brand-new Seed —
+	# net.gd's raid_seed must move off 42
+	waited = 0.0
+	while seed_val.v == 42 and waited < 10.0:
+		await create_timer(0.2).timeout
+		waited += 0.2
+	_check("rejoin starts raid #2 with a fresh seed", seed_val.v != 42)
+
+	# raid #2 actually runs: re-attach the stub world, park, wait for a
+	# NEW mirror entry (the old raid's zombie stays in the history array)
+	net.world = world
+	net.push_player_state(Vector3.ZERO, 0.0, 0.0, true, false)
+	var mirrors_before: int = mgr.mirrored.size()
+	waited = 0.0
+	while mgr.mirrored.size() == mirrors_before and waited < 15.0:
+		await create_timer(0.5).timeout
+		waited += 0.5
+	_check("raid #2 spawns zombies", mgr.mirrored.size() > mirrors_before)
+
 	net.leave()
 	OS.kill(server_pid)
 	print("ws roundtrip done: %s" % ("ALL PASS" if fails == 0 else "%d FAILED" % fails))

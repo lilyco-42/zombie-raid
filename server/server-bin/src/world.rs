@@ -120,12 +120,56 @@ impl World {
         self.players.len()
     }
 
+    // -------------------------------------------------------- lifecycle --
+    /// Fresh seed for the next raid: LCG output xor'd with the elapsed
+    /// clock's bit pattern. Two raids never end at the exact same f32, so
+    /// this differentiates rounds even with the fixed boot seed (v1 has no
+    /// CLI seed arg yet). Pure function -> unit-testable.
+    fn next_seed(&mut self) -> u64 {
+        (self.rng.next_u31() as u64) ^ ((self.elapsed.to_bits() as u64) << 1)
+    }
+
+    /// Wipe every raid-local field and reseed. `*self = Self::new(..)` keeps
+    /// the reset exhaustive by construction: add a field to World and the
+    /// compiler makes you decide whether Self::new resets it.
+    pub fn reset(&mut self, seed: u64) {
+        *self = Self::new(seed);
+    }
+
+    /// Hello handler. A Hello during a live raid is a no-op (the Seed
+    /// handshake in main.rs already restored the joiner's clock). A Hello
+    /// once the previous raid is OVER starts the next one: reset with a
+    /// fresh seed and broadcast the new Seed so every connected client
+    /// (including stale ones from the finished raid) rebuilds — net.gd's
+    /// rpc_seed reloads the scene whenever raid_seed changes.
+    pub fn handle_hello(&mut self) -> Vec<S2C> {
+        if self.raid_active {
+            return vec![];
+        }
+        let seed = self.next_seed();
+        self.reset(seed);
+        vec![S2C::Seed {
+            seed,
+            elapsed: 0.0,
+        }]
+    }
+
     // ------------------------------------------------------ inputs (C2S) --
     pub fn player_state(&mut self, pid: u32, pos: [f32; 3]) {
-        // v1: players are never removed (disconnect cleanup lands with
-        // per-peer session tracking; a stale position only risks a zombie
-        // chasing a ghost, never a correctness bug on the reporter side).
         self.players.insert(pid, pos);
+    }
+
+    /// Disconnect cleanup: the connection task infers this peer's pid from
+    /// its first reported state/hit and hands it over on close. Drops the
+    /// position (zombies stop chasing the ghost) and the hit-rate clock.
+    pub fn retire_player(&mut self, pid: u32) {
+        self.players.remove(&pid);
+        self.hit_times.remove(&pid);
+        // Everyone left a raid that actually ran: stop the clock now
+        // instead of letting it coast to the 570s team-kill with no audience.
+        if self.players.is_empty() && self.raid_active && self.elapsed > 0.0 {
+            self.raid_active = false;
+        }
     }
 
     /// net.gd rpc_hit_zombie: rate gate (clock untouched on reject) ->
@@ -182,11 +226,11 @@ impl World {
     }
 
     /// Central C2S dispatcher — keeps main.rs thin and is unit-testable.
-    /// `Hello` needs no world reaction (main logs it), hence the `_` arm.
+    /// `Hello` restarts a finished raid (see `handle_hello`); main.rs logs it.
     pub fn handle(&mut self, msg: &protocol::C2S) -> Vec<S2C> {
         use protocol::C2S;
         match msg {
-            C2S::Hello { .. } => vec![],
+            C2S::Hello { .. } => self.handle_hello(),
             C2S::PlayerState { pid, pos, .. } => {
                 self.player_state(*pid, *pos);
                 vec![]
@@ -658,5 +702,104 @@ mod tests {
         assert!(saw_frenzy, "NetState flags frenzy at RUN_LIMIT");
         assert!(failed, "raid fails after RUN_LIMIT + FRENZY_GRACE");
         assert!(!w.raid_active);
+    }
+
+    // ---- session lifecycle (step 5) ----
+
+    #[test]
+    fn hello_restarts_a_finished_raid() {
+        let mut w = World::new(42);
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        let id = w.force_spawn(1, [5.0, 0.0, 0.0]);
+        assert!(w.handle(&C2S::ReportPlayerDied).len() == 1);
+        assert!(!w.raid_active);
+        // the next Hello starts raid #2 on a fresh seed and broadcasts it
+        let out = w.handle(&C2S::Hello { ver: 2 });
+        match &out[..] {
+            [S2C::Seed { seed, elapsed }] => {
+                assert_ne!(*seed, 42, "next raid must get a fresh seed");
+                assert_eq!(*seed, w.seed);
+                assert_eq!(*elapsed, 0.0);
+            }
+            other => panic!("expected one Seed, got {other:?}"),
+        }
+        assert!(w.raid_active, "raid #2 is live");
+        assert_eq!(w.elapsed, 0.0);
+        assert!(w.zombies().is_empty(), "raid #2 starts clean");
+        assert!(w.zombies().iter().all(|z| z.id != id));
+        assert_eq!(w.player_count(), 0, "roster clears; clients re-report state");
+        // and the new world actually runs: 20s with a player spawns again
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        assert!(msgs_of(&mut w, 400).iter().any(|m| matches!(
+            m, S2C::ZombieStates { ents, .. } if !ents.is_empty()
+        )), "raid #2 must spawn zombies");
+    }
+
+    #[test]
+    fn hello_during_live_raid_is_noop() {
+        let mut w = World::new(42);
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        w.elapsed = 12.5; // mid-raid
+        assert!(w.handle(&C2S::Hello { ver: 2 }).is_empty());
+        assert!(w.raid_active);
+        assert_eq!(w.elapsed, 12.5, "live raid is untouched by a Hello");
+    }
+
+    #[test]
+    fn retire_player_cleans_up_and_freezes_an_empty_raid() {
+        let mut w = World::new(42);
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        w.player_state(3, [9.0, 0.0, 9.0]);
+        let id = w.force_spawn(1, [5.0, 0.0, 0.0]);
+        msgs_of(&mut w, 5); // elapsed > 0: this raid actually ran
+        // one player leaves: raid keeps running for the survivor
+        w.retire_player(2);
+        assert_eq!(w.player_count(), 1);
+        assert!(w.raid_active);
+        // their hit-rate clock dies with them: same-elapsed shot accepted
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        assert!(w.validate_hit(2, id, 10.0).is_empty(), "shot must pass the gates");
+        assert_eq!(w.zombies()[0].hp, 50.0, "fresh hit clock after retire");
+        // the last player leaves a raid that ran: clock stops immediately
+        w.retire_player(2);
+        w.retire_player(3);
+        assert_eq!(w.player_count(), 0);
+        assert!(!w.raid_active, "empty raid freezes instead of coasting");
+        assert!(w.tick(DT).is_empty());
+        let _ = id;
+    }
+
+    #[test]
+    fn everyone_leaving_then_hello_starts_next_raid() {
+        let mut w = World::new(42);
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        msgs_of(&mut w, 100); // 5s of raid time (elapsed > 0)
+        w.retire_player(2);
+        assert!(!w.raid_active);
+        let out = w.handle(&C2S::Hello { ver: 2 });
+        assert!(matches!(out[..], [S2C::Seed { .. }]), "restart on rejoin");
+        assert!(w.raid_active);
+        assert_eq!(w.elapsed, 0.0);
+    }
+
+    #[test]
+    fn restart_seed_differs_across_two_finished_raids() {
+        let mut w = World::new(42);
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        msgs_of(&mut w, 200); // raid #1 runs ~10s
+        w.handle(&C2S::ReportPlayerDied);
+        let seed2 = match &w.handle(&C2S::Hello { ver: 2 })[..] {
+            [S2C::Seed { seed, .. }] => *seed,
+            other => panic!("{other:?}"),
+        };
+        // raid #2 runs a different length -> a third raid gets another seed
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        msgs_of(&mut w, 500); // ~25s
+        w.handle(&C2S::ReportPlayerDied);
+        let seed3 = match &w.handle(&C2S::Hello { ver: 2 })[..] {
+            [S2C::Seed { seed, .. }] => *seed,
+            other => panic!("{other:?}"),
+        };
+        assert_ne!(seed2, seed3, "each raid gets its own seed");
     }
 }

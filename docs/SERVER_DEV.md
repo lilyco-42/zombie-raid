@@ -159,14 +159,28 @@ little-endian；判别值 u32；`Vec` 长度前缀 **u64**；bool 1 字节；f32
      `test_ws_codec.gd` 25 断言（F1-F7 黄金字节/pump 集成）+
      ws_roundtrip 端到端（服务器日志实锤 `hello ver=2 binary_out=true` +
      二进制 C2S 解码）+ python 冒烟 v1 JSON 兼容（`binary_out=false`）。
-4. **两条可选升级线**（互不阻塞，按需启用）：
+4. ✅ **会话生命周期**（2026-09-08）：修复"一次性世界"与"断线不清账"：
+   - World `handle_hello()`：活局中 Hello 是 no-op（握手 Seed 已恢复时钟）；
+     终局后 Hello 以 `next_seed()`（rng ⊕ elapsed 位混合）重开新局并广播
+     新 Seed——所有在线客户端（含旧局残留连接）经 net.gd 的 rpc_seed
+     检测 raid_seed 变化自动重建世界，"任意时刻连上就能玩"；
+   - World `retire_player(pid)`：连接断开时移除 players/hit_times；
+     最后一人在局中离开则停表冻结（raid_active=false），等下一个 Hello 重开；
+   - `server-bin/main.rs`：每连接从首条 state/hit 推断 `claimed_pid`，
+     断线时 retire（v1 信任模型的断线清账）；Hello 仍负责 binary_out 升级
+     但**放行进 World**——曾因步骤④"拦截不进 World"语义导致重开局 Seed
+     永不广播（单元测试直接调 World 看不见这种集成断链，端到端才抓得到）；
+   - 测试：cargo 24（server-bin 16 含 5 个生命周期测试）+ ws_roundtrip 扩展
+     第二局阶段（rejoin → 新 seed ≠ 42 → 第二局刷怪）11 项 ALL PASS。
+5. **两条可选升级线**（互不阻塞，按需启用）：
    - **低延迟线**：gdext 扩展嵌 renet client → UDP + netcode 加密鉴权，
      客户端延迟与加密一步到位（与现有 ENet 同为 UDP，体验对齐）；
    - **WebTransport 线**：服务端加 quinn + web-transport-quinn 监听（BBR 拥塞控制），
      为浏览器端/弱网重连预留——Godot 侧仍走 WS/UDP，不强制迁移。
 
 遗留（不阻塞当前玩法）：箱子/战利品服务端记账（v1 只中继 RemoveBox）、
-地图 SpawnPoint 数据上行（v1 玩家环外刷）、断线会话清理、pid 鉴权。
+地图 SpawnPoint 数据上行（v1 玩家环外刷）、pid 鉴权。
+（~~断线会话清理~~ 已解决：步骤 4 的 retire_player + Hello 重开局。）
 
 ## 7. `server/` 目标布局（Cargo workspace）
 
