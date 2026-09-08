@@ -1,16 +1,24 @@
-//! zombie-raid wire protocol v1 — single source of truth (docs/SERVER_DEV.md §4).
+//! zombie-raid wire protocol — single source of truth (docs/SERVER_DEV.md §4).
 //! Each variant translates 1:1 from a net.gd rpc_* endpoint; direction,
 //! frequency and reliability guarantees live in the SERVER_DEV message table.
+//!
+//! Two wire formats share these enums:
+//! - v1 JSON (serde externally-tagged; unit variants serialize as bare strings)
+//! - v2 bincode legacy over WS binary frames, negotiated per connection with
+//!   Hello{ver:2}. The layout is frozen by the golden-byte tests below and
+//!   mirrored by the GDScript encoder `game/scripts/net_codec.gd`.
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_ID: u32 = 1;
+pub const PROTOCOL_ID: u32 = 2;
 pub const DEFAULT_PORT: u16 = 24565;
 
-/// Client -> server messages (JSON over WS for v1; bincode later).
+/// Client -> server messages.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum C2S {
-    /// connection handshake (joins `join_game` / answers `rpc_seed`)
+    /// connection handshake (joins `join_game` / answers `rpc_seed`).
+    /// ver >= 2 (sent as a binary frame) upgrades the connection downlink
+    /// to bincode; the server never forwards Hello to the World.
     Hello { ver: u32 },
     /// 15Hz unreliable — was `rpc_player_state`
     PlayerState {
@@ -74,6 +82,17 @@ pub struct ZombieEnt {
     pub ztype: u8,
 }
 
+/// Serialize a server->client message to bincode (wire format v2).
+pub fn encode_s2c(msg: &S2C) -> Vec<u8> {
+    bincode::serialize(msg).expect("S2C is infallibly serializable")
+}
+
+/// Deserialize a client->server binary frame (wire format v2).
+/// Returns None on malformed/out-of-range frames (logged by the caller).
+pub fn decode_c2s(bytes: &[u8]) -> Option<C2S> {
+    bincode::deserialize(bytes).ok()
+}
+
 /// Deterministic 64-bit LCG shared with the GDScript side
 /// (`tests/test_lcg.gd`). The state update is mul+add only — signed int64
 /// wrap (GDScript) equals wrapping u64 ops (Rust) bit-for-bit; the output
@@ -118,7 +137,7 @@ mod tests {
     #[test]
     fn c2s_roundtrip_json_and_bincode() {
         let msgs = vec![
-            C2S::Hello { ver: 1 },
+            C2S::Hello { ver: 2 },
             C2S::PlayerState {
                 pid: 2,
                 pos: [1.5, 0.0, -3.25],
@@ -202,5 +221,97 @@ mod tests {
         };
         let bytes = bincode::serialize(&snap).unwrap();
         assert!(bytes.len() < 1200, "snapshot too big: {} bytes", bytes.len());
+    }
+
+    // --------------------------------------------------------------- //
+    // Golden bytes — computed with python struct.pack and mirrored by   //
+    // tests/test_ws_codec.gd section F. These pin the cross-language    //
+    // bincode legacy layout: little-endian, u32 enum discriminants,     //
+    // u64 vec lengths, 1-byte bools, 4-byte f32s, no struct padding.    //
+    // ----------------------------------------------------------------- //
+
+    #[test]
+    fn golden_hit_zombie_bytes() {
+        // C2S variant 2, pid 2, net_id 9, dmg 34.5 (0x420A0000)
+        let b = bincode::serialize(&C2S::HitZombie { pid: 2, net_id: 9, dmg: 34.5 }).unwrap();
+        assert_eq!(
+            b,
+            vec![0x02, 0, 0, 0, 0x02, 0, 0, 0, 0x09, 0, 0, 0, 0x00, 0x00, 0x0a, 0x42]
+        );
+        // ...and the exact same bytes round-trip back through decode_c2s.
+        assert_eq!(
+            decode_c2s(&[
+                0x02, 0, 0, 0, 0x02, 0, 0, 0, 0x09, 0, 0, 0, 0x00, 0x00, 0x0a, 0x42
+            ]),
+            Some(C2S::HitZombie {
+                pid: 2,
+                net_id: 9,
+                dmg: 34.5
+            })
+        );
+    }
+
+    #[test]
+    fn golden_player_state_bytes() {
+        // C2S variant 1, pid 7, pos [1.5,0,-3.25], yaw 0.7, speed 4.2,
+        // on_floor true (0x01), crouch false (0x00) — 30 bytes.
+        let b = bincode::serialize(&C2S::PlayerState {
+            pid: 7,
+            pos: [1.5, 0.0, -3.25],
+            yaw: 0.7,
+            speed: 4.2,
+            on_floor: true,
+            crouch: false,
+        })
+        .unwrap();
+        assert_eq!(
+            b,
+            vec![
+                0x01, 0, 0, 0, 0x07, 0, 0, 0, // variant + pid
+                0x00, 0x00, 0xc0, 0x3f, // 1.5f32
+                0x00, 0x00, 0x00, 0x00, // 0.0f32
+                0x00, 0x00, 0x50, 0xc0, // -3.25f32
+                0x33, 0x33, 0x33, 0x3f, // 0.7f32
+                0x66, 0x66, 0x86, 0x40, // 4.2f32
+                0x01, 0x00, // on_floor, crouch
+            ]
+        );
+    }
+
+    #[test]
+    fn golden_zombie_states_bytes() {
+        // S2C variant 1, seq 7, vec len 1 (u64), one ent {id 3,
+        // pos [1,2,3], yaw 1.57, anim 2, ztype 1} — 38 bytes.
+        let snap = S2C::ZombieStates {
+            seq: 7,
+            ents: vec![ZombieEnt {
+                id: 3,
+                pos: [1.0, 2.0, 3.0],
+                yaw: 1.57,
+                anim: 2,
+                ztype: 1,
+            }],
+        };
+        let b = encode_s2c(&snap);
+        assert_eq!(
+            b,
+            vec![
+                0x01, 0, 0, 0, 0x07, 0, 0, 0, // variant + seq
+                0x01, 0, 0, 0, 0, 0, 0, 0, // vec length u64 = 1
+                0x03, 0, 0, 0, // ent.id
+                0x00, 0x00, 0x80, 0x3f, // 1.0f32
+                0x00, 0x00, 0x00, 0x40, // 2.0f32
+                0x00, 0x00, 0x40, 0x40, // 3.0f32
+                0xc3, 0xf5, 0xc8, 0x3f, // 1.57f32
+                0x02, 0x01, // anim, ztype
+            ]
+        );
+        assert_eq!(decode_c2s(&[0xff, 0xff, 0xff, 0xff]), None); // variant 4294967295
+    }
+
+    #[test]
+    fn golden_raid_failed_bytes() {
+        // Unit variant: discriminant only, no payload — 4 bytes.
+        assert_eq!(encode_s2c(&S2C::RaidFailed), vec![0x07, 0, 0, 0]);
     }
 }

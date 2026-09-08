@@ -1,12 +1,17 @@
-//! zombie-raid authoritative dedicated server — migration step ③
+//! zombie-raid authoritative dedicated server — migration steps ③+④
 //! (SERVER_DEV.md §6). Listens on WS :24565 for Godot clients, runs the
-//! 20 TPS authority tick and broadcasts every S2C the tick produces as
-//! JSON. The ENet LAN path in net.gd stays untouched.
+//! 20 TPS authority tick and broadcasts every S2C the tick produces.
+//!
+//! Wire format is negotiated per connection: the handshake Seed always
+//! goes out as JSON text (it precedes any inbound frame, so v1 JSON
+//! clients and v2 binary clients both read it). A client Hello{ver >= 2}
+//! sent as a bincode binary frame upgrades that connection's downlink to
+//! bincode. Text frames stay JSON, binary frames are bincode (protocol
+//! crate encode_s2c / decode_c2s).
 //!
 //! Wiring: one `Arc<Mutex<World>>` shared by the tick task and every
-//! connection task. Tick task: World::tick(0.05) -> serialize Vec<S2C> ->
-//! broadcast channel. Connection task: inbound C2S -> World::handle ->
-//! broadcast the replies; outbound -> forward channel lines to the socket.
+//! connection task. The broadcast channel carries S2C VALUES — each
+//! connection serializes to its own format at flush time.
 
 mod world;
 
@@ -21,7 +26,7 @@ const SEED: u64 = 42; // TODO: pass via CLI arg / room config
 
 #[tokio::main]
 async fn main() {
-    let (tx, _rx) = broadcast::channel::<String>(256);
+    let (tx, _rx) = broadcast::channel::<S2C>(256);
     let world = Arc::new(Mutex::new(world::World::new(SEED)));
 
     // Authority heartbeat: 20 TPS fixed tick (Minecraft-style), exactly like
@@ -36,7 +41,7 @@ async fn main() {
                 int.tick().await;
                 let msgs = world.lock().unwrap().tick(1.0 / world::TICK_HZ);
                 for m in msgs {
-                    let _ = tx.send(serde_json::to_string(&m).unwrap());
+                    let _ = tx.send(m);
                 }
             }
         });
@@ -65,7 +70,7 @@ async fn main() {
 async fn handle_connection(
     stream: tokio::net::TcpStream,
     addr: String,
-    tx: broadcast::Sender<String>,
+    tx: broadcast::Sender<S2C>,
     world: Arc<Mutex<world::World>>,
 ) {
     let ws = match tokio_tungstenite::accept_async(stream).await {
@@ -77,10 +82,11 @@ async fn handle_connection(
     };
     let (mut sink, mut stream) = ws.split();
     let mut rx = tx.subscribe();
+    let mut binary_out = false; // flips on Hello{ver >= 2}
     println!("[{addr}] connected");
 
-    // Seed handshake first, mirroring rpc_seed: the client builds nothing
-    // until it knows the world seed, and late joiners restore the clock.
+    // Seed handshake first, always as JSON text: it precedes any inbound
+    // frame, so v1 JSON clients and v2 binary clients both read it.
     let seed = {
         let w = world.lock().unwrap();
         S2C::Seed {
@@ -98,15 +104,27 @@ async fn handle_connection(
             inbound = stream.next() => match inbound {
                 Some(Ok(Message::Text(t))) => match serde_json::from_str::<C2S>(&t) {
                     Ok(c2s) => {
-                        println!("[{addr}] {c2s:?}");
-                        let replies = world.lock().unwrap().handle(&c2s);
-                        for m in replies {
-                            let _ = tx.send(serde_json::to_string(&m).unwrap());
+                        if let Some(c2s) = accept(c2s, &addr, &mut binary_out) {
+                            let replies = world.lock().unwrap().handle(&c2s);
+                            for m in replies {
+                                let _ = tx.send(m);
+                            }
                         }
                     }
-                    Err(e) => println!("[{addr}] bad message: {e}"),
+                    Err(e) => println!("[{addr}] bad text message: {e}"),
                 },
-                Some(Ok(_)) => {} // binary/ping: accepted, unused in v1
+                Some(Ok(Message::Binary(b))) => match protocol::decode_c2s(&b) {
+                    Some(c2s) => {
+                        if let Some(c2s) = accept(c2s, &addr, &mut binary_out) {
+                            let replies = world.lock().unwrap().handle(&c2s);
+                            for m in replies {
+                                let _ = tx.send(m);
+                            }
+                        }
+                    }
+                    None => println!("[{addr}] bad binary frame ({} bytes)", b.len()),
+                },
+                Some(Ok(_)) => {} // ping/pong: accepted, unused
                 Some(Err(e)) => {
                     println!("[{addr}] read error: {e}");
                     break;
@@ -114,8 +132,13 @@ async fn handle_connection(
                 None => break,
             },
             outbound = rx.recv() => match outbound {
-                Ok(line) => {
-                    if sink.send(Message::text(line)).await.is_err() {
+                Ok(m) => {
+                    let msg = if binary_out {
+                        Message::binary(protocol::encode_s2c(&m))
+                    } else {
+                        Message::text(serde_json::to_string(&m).unwrap())
+                    };
+                    if sink.send(msg).await.is_err() {
                         break;
                     }
                 }
@@ -127,4 +150,22 @@ async fn handle_connection(
         }
     }
     println!("[{addr}] disconnected");
+}
+
+/// Inbound pre-processing: intercept the binary upgrade handshake (Hello
+/// never reaches the World) and pass everything else through.
+fn accept(c2s: C2S, addr: &str, binary_out: &mut bool) -> Option<C2S> {
+    match c2s {
+        C2S::Hello { ver } => {
+            if ver >= 2 {
+                *binary_out = true;
+            }
+            println!("[{addr}] hello ver={ver} binary_out={binary_out}");
+            None
+        }
+        other => {
+            println!("[{addr}] {other:?}");
+            Some(other)
+        }
+    }
 }

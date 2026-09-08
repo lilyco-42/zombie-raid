@@ -78,7 +78,31 @@ net.gd 的 RPC 注解已写明方向、频率与可靠性，直接映射成 `pro
 | `damage_player` | 事件 | 可靠 | dmg | `rpc_damage_player` |
 
 renet 通道配置直接对号入座：快照走 `Unreliable` 通道，其余全部 `ReliableOrdered`；
-WS 路径用帧头 1 字节消息类型 + 可靠 TCP 自带有序。
+WS 路径见下方帧格式 v2（bincode 判别值兼任类型头，无需独立帧头字节）。
+
+### WS 二进制帧格式 v2（2026-09-08 落地）
+
+同一套 `protocol` 枚举跑两种线格式，按连接协商：
+
+| | v1 JSON（文本帧） | v2 bincode（二进制帧） |
+|---|---|---|
+| 载荷 | serde externally-tagged JSON | `bincode::serialize(完整枚举)` |
+| 类型头 | externally-tagged 键名 | 枚举判别值（**u32 LE**）即类型头 |
+| 单元变体 | 裸字符串 `"RaidFailed"` | 仅 4 字节判别值 `07 00 00 00` |
+
+bincode legacy 布局（黄金字节测试钉死，`protocol/src/lib.rs` golden_* 测试 ↔
+`game/scripts/net_codec.gd` 逐字节镜像，python struct.pack 计算参考值）：
+little-endian；判别值 u32；`Vec` 长度前缀 **u64**；bool 1 字节；f32 4 字节；
+`[f32;3]` 无长度前缀连排；结构体按字段声明序、无 padding。
+变体索引 = 声明序：C2S `Hello=0 …ReportPlayerDied=5`；S2C `Seed=0 …DamagePlayer=8`。
+
+协商流程（`server-bin/main.rs` ↔ `net.gd _ws_pump`）：
+1. 连接建立 → 服务器**先发 JSON 文本 Seed**（早于任何入站帧，新旧客户端通吃）；
+2. 客户端 socket open 后发一帧二进制 `Hello{ver:2}`（GDScript `encode_c2s`）；
+3. 服务器拦截 Hello（不进 World），`ver>=2` 置 `binary_out=true`——该连接下行
+   切换 bincode；`ver:1` 客户端保持 JSON（python 冒烟验证双向兼容）；
+4. 入站按帧型自动检测：Text→serde_json / Binary→`decode_c2s`（坏帧记日志丢弃）；
+   广播通道携带 S2C **值**，各连接在出站侧按自身格式序列化。
 
 ## 5. 关键设计：几何留客户端，状态走网络（不变）
 
@@ -121,8 +145,20 @@ WS 路径用帧头 1 字节消息类型 + 可靠 TCP 自带有序。
      **坑**：serde 单变体 S2C 上线是裸字符串（`"RaidFailed"`），泵需双形态解析；
    - 测试：cargo 15 个 + `tests/test_ws_codec.gd`（18 断言防漂移）
      + `tests/ws_roundtrip.gd`（真实 Godot 客户端 ↔ 真实服务器全链路）。
-3. **二进制化**（下一步）：事件消息 serde→bincode/postcard（`protocol` crate 加 feature 即可）；
-   快照维持 float32 数组；WS 帧内自定义 1 字节类型头。
+3. ✅ **二进制化**（2026-09-08，帧格式见 §4 v2 小节）：
+   - `protocol` crate：`encode_s2c`/`decode_c2s` 集中 bincode legacy 配置，
+     4 个黄金字节测试（HitZombie/PlayerState/ZombieStates/RaidFailed）钉死跨语言布局；
+   - `server-bin/main.rs`：广播通道 `String`→`S2C` 值；每连接 `binary_out` 协商
+     （`Hello{ver>=2}` 翻转，拦截不进 World）；入站 Text/Binary 双路解析；
+   - GDScript：`net_codec.gd`（StreamPeerBuffer 编解码，产出/消费与 JSON 相同的
+     字典形状 → `_dispatch_s2c` 零改动）+ `net_transport_ws.gd` `send_bytes`/`poll_frames`
+     （`was_string_packet()` 分流）+ net.gd `_ws_binary`/`_ws_hello_sent` 协商状态机；
+     **坑**：Godot 4.4+ WebSocketPeer 二进制发送是 `send(PackedByteArray)`——
+     `send_bytes`/`send_message`/`send_packet` 均不存在（ClassDB 方法表实测）；
+   - 测试：cargo 19（protocol 8 含 4 黄金 + server-bin 11）+
+     `test_ws_codec.gd` 25 断言（F1-F7 黄金字节/pump 集成）+
+     ws_roundtrip 端到端（服务器日志实锤 `hello ver=2 binary_out=true` +
+     二进制 C2S 解码）+ python 冒烟 v1 JSON 兼容（`binary_out=false`）。
 4. **两条可选升级线**（互不阻塞，按需启用）：
    - **低延迟线**：gdext 扩展嵌 renet client → UDP + netcode 加密鉴权，
      客户端延迟与加密一步到位（与现有 ENet 同为 UDP，体验对齐）；

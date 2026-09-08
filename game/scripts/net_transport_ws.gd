@@ -1,9 +1,11 @@
 extends RefCounted
 ## WsTransport — raw WebSocketPeer link to the Rust dedicated server
 ## (docs/SERVER_DEV.md §6 step ③). NOT a MultiplayerAPI peer: net.gd flips
-## to _ws_mode and routes JSON dicts through send_text / poll_texts, so
-## this class deliberately does not extend net_transport.gd (its join()
-## takes a full ws:// URL, not address+port).
+## to _ws_mode and routes frames through send_text / send_bytes /
+## poll_frames, so this class deliberately does not extend
+## net_transport.gd (its join() takes a full ws:// URL, not address+port).
+## Text frames carry JSON (v1), binary frames carry bincode (v2); the
+## caller tells them apart by the element type poll_frames returns.
 
 var _ws: WebSocketPeer = null
 
@@ -36,14 +38,23 @@ func send_text(line: String) -> void:
 	if is_open():
 		_ws.send_text(line)
 
-## Pump the socket state machine and drain every queued text frame.
-## Returns the lines received since the previous call.
-func poll_texts() -> PackedStringArray:
-	var out := PackedStringArray()
+func send_bytes(data: PackedByteArray) -> void:
+	if is_open():
+		_ws.send(data)  # binary frame (Godot 4.4+ unified WebSocket API)
+
+## Pump the socket state machine and drain every queued frame. String
+## elements are text frames (JSON), PackedByteArray elements are binary
+## frames (bincode v2 — decode with net_codec.gd).
+func poll_frames() -> Array:
+	var out := []
 	if _ws == null:
 		return out
 	_ws.poll()
 	if _ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
 		while _ws.get_available_packet_count() > 0:
-			out.append(_ws.get_packet().get_string_from_utf8())
+			var pkt := _ws.get_packet()
+			if _ws.was_string_packet():
+				out.append(pkt.get_string_from_utf8())
+			else:
+				out.append(pkt)
 	return out

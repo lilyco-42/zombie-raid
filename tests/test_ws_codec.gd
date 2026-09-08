@@ -1,10 +1,12 @@
 extends SceneTree
 ## Headless verification: WS codec between net.gd (_ws_mode) and the Rust
-## server's serde externally-tagged JSON (protocol crate is the source of
-## truth). Run: godot --headless --path . --script tests/test_ws_codec.gd
+## server (protocol crate is the source of truth).
+## Run: godot --headless --path . --script tests/test_ws_codec.gd
 ## Covers: C2S JSON shapes (anti-drift), S2C dispatch (Seed, snapshot
 ## rebuild to the ENet float layout, clock, death, raid end), DamagePlayer
-## pid filter, disconnect -> leave().
+## pid filter, disconnect -> leave(), and section F: the wire format v2
+## binary codec (net_codec.gd) against the golden bytes pinned by the
+## Rust protocol crate tests.
 
 var fails := 0
 
@@ -56,9 +58,12 @@ func _make_script(source: String) -> GDScript:
 	gs.reload()
 	return gs
 
+## Records text AND binary sends; poll_frames returns nothing. Used to
+## observe what net.gd puts on the wire in both v1 (JSON) and v2 (bincode).
 const TRANSPORTSTUB_SRC := """
 extends RefCounted
 var sent: Array = []
+var sent_bytes: Array = []
 var closed := false
 func join(_url: String) -> Error:
 	return OK
@@ -70,14 +75,19 @@ func is_closed() -> bool:
 	return closed
 func send_text(line: String) -> void:
 	sent.append(line)
-func poll_texts() -> PackedStringArray:
-	return PackedStringArray()
+func send_bytes(data: PackedByteArray) -> void:
+	sent_bytes.append(data)
+func poll_frames() -> Array:
+	return []
 """
 
-## Stub whose poll_texts replays queued raw wire lines (pump-driven tests).
+## Stub whose poll_frames replays queued frames — elements are Strings
+## (JSON v1 wire) or PackedByteArrays (bincode v2 wire). Mirrors the real
+## transport's dual-format contract.
 const FEEDSTUB_SRC := """
 extends RefCounted
 var feed: Array = []
+var sent_bytes: Array = []
 var closed := false
 func close() -> void:
 	closed = true
@@ -87,10 +97,12 @@ func is_closed() -> bool:
 	return closed
 func send_text(_line: String) -> void:
 	pass
-func poll_texts() -> PackedStringArray:
-	var out := PackedStringArray()
-	for line in feed:
-		out.append(line)
+func send_bytes(data: PackedByteArray) -> void:
+	sent_bytes.append(data)
+func poll_frames() -> Array:
+	var out := []
+	for f in feed:
+		out.append(f)
 	feed.clear()
 	return out
 """
@@ -253,6 +265,79 @@ func _run() -> void:
 	net._ws_pump(0.0)
 	_check("closed socket -> leave()", not net.online and net._transport == null
 		and not net._ws_mode)
+
+	# --- F. wire format v2: binary codec vs the Rust golden bytes ----------
+	# Golden bytes computed with python struct.pack, pinned on the Rust side
+	# by server/protocol/src/lib.rs golden_*_tests. Any drift between the
+	# GDScript encoder and bincode legacy breaks the live server.
+	var NetCodec := load("res://game/scripts/net_codec.gd")
+
+	# F1: decode the golden ZombieStates frame (38 bytes)
+	var golden_zs := PackedByteArray([0x01, 0, 0, 0, 0x07, 0, 0, 0,
+		0x01, 0, 0, 0, 0, 0, 0, 0,
+		0x03, 0, 0, 0,
+		0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x40, 0x40,
+		0xc3, 0xf5, 0xc8, 0x3f, 0x02, 0x01])
+	var dec: Dictionary = NetCodec.decode_s2c(golden_zs)
+	var ok_zs: bool = dec.has("ZombieStates") \
+		and int(dec["ZombieStates"]["seq"]) == 7 \
+		and dec["ZombieStates"]["ents"].size() == 1
+	if ok_zs:
+		var e: Dictionary = dec["ZombieStates"]["ents"][0]
+		ok_zs = int(e["id"]) == 3 and absf(float(e["yaw"]) - 1.57) < 0.0001 \
+			and int(e["anim"]) == 2 and int(e["ztype"]) == 1 \
+			and absf(float(e["pos"][0]) - 1.0) < 0.0001 \
+			and absf(float(e["pos"][1]) - 2.0) < 0.0001 \
+			and absf(float(e["pos"][2]) - 3.0) < 0.0001
+	_check("F1 decode golden ZombieStates", ok_zs)
+
+	# F2: decode the golden RaidFailed frame (4 bytes: variant 7 only)
+	var dec_rf: Dictionary = NetCodec.decode_s2c(PackedByteArray([0x07, 0, 0, 0]))
+	_check("F2 decode golden RaidFailed", dec_rf.size() == 1
+		and dec_rf.has("RaidFailed") and dec_rf["RaidFailed"] == null)
+
+	# F3: encode HitZombie -> exact golden bytes
+	var golden_hit := PackedByteArray([0x02, 0, 0, 0, 0x02, 0, 0, 0,
+		0x09, 0, 0, 0, 0x00, 0x00, 0x0a, 0x42])
+	_check("F3 encode golden HitZombie",
+		NetCodec.encode_c2s({"HitZombie": {"pid": 2, "net_id": 9, "dmg": 34.5}}) == golden_hit)
+
+	# F4: encode PlayerState -> exact golden bytes (30 bytes)
+	var golden_ps := PackedByteArray([0x01, 0, 0, 0, 0x07, 0, 0, 0,
+		0x00, 0x00, 0xc0, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0xc0,
+		0x33, 0x33, 0x33, 0x3f, 0x66, 0x66, 0x86, 0x40, 0x01, 0x00])
+	_check("F4 encode golden PlayerState",
+		NetCodec.encode_c2s({"PlayerState": {"pid": 7, "pos": [1.5, 0.0, -3.25],
+			"yaw": 0.7, "speed": 4.2, "on_floor": true, "crouch": false}}) == golden_ps)
+
+	# F5: pump over a fresh feed stub -> the binary Hello{ver:2} upgrade
+	# frame goes out first, and the negotiation flag flips.
+	var t3 = _make_script(FEEDSTUB_SRC).new()
+	net._transport = t3
+	net._ws_mode = true
+	net._ws_pid = 2
+	net.online = true
+	net._ws_binary = false
+	net._ws_hello_sent = false
+	var golden_hello := PackedByteArray([0x00, 0, 0, 0, 0x02, 0, 0, 0])
+	net._ws_pump(0.0)
+	_check("F5 binary Hello upgrade on open", t3.sent_bytes.size() == 1
+		and t3.sent_bytes[0] == golden_hello and net._ws_binary)
+
+	# F6: end-to-end binary pump — feed the golden ZombieStates frame as a
+	# PackedByteArray and watch it mirror through the SAME dispatch path.
+	t3.feed.append(golden_zs)
+	net._ws_pump(0.0)
+	var z3 = world.get_node_or_null(NodePath("Z_3"))
+	_check("F6 binary snapshot mirrors through pump", mgr.mirrored.size() == 2
+		and int(mgr.mirrored[1][0]) == 3 and int(mgr.mirrored[1][2]) == 1
+		and z3 != null and int(z3.last_seq) == 7)
+
+	# F7: in binary mode the send wrappers emit codec bytes on the wire
+	net._ws_pid = 2
+	net.send_hit_zombie(9, 34.5)
+	_check("F7 send_hit_zombie emits golden bytes", t3.sent_bytes.size() == 2
+		and t3.sent_bytes[1] == golden_hit)
 
 	print("ws codec test done: %s" % ("ALL PASS" if fails == 0 else "%d FAILED" % fails))
 	quit(1 if fails > 0 else 0)

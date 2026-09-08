@@ -38,6 +38,9 @@ const RemoteAvatarScript := preload("res://game/scripts/remote_avatar.gd")
 # WsTransport (Rust server) plugs in here without touching rpc_* call sites.
 const TransportScript := preload("res://game/scripts/net_transport_enet.gd")
 const WsTransportScript := preload("res://game/scripts/net_transport_ws.gd")
+# Binary codec for wire format v2 (layout pinned by server/protocol golden
+# byte tests; net_codec.gd must mirror them exactly)
+const NetCodec := preload("res://game/scripts/net_codec.gd")
 
 var online := false
 var hosting := false
@@ -49,6 +52,8 @@ var world: Node3D               # registered by world_raid._ready
 var _transport = null           # NetTransport instance while online
 var _ws_mode := false           # linked to the Rust dedicated server (raw WS)
 var _ws_pid := 0                # self-chosen id in WS mode (server-trusted v1)
+var _ws_binary := false         # v2 negotiated: bincode frames both ways
+var _ws_hello_sent := false     # the Hello{ver:2} upgrade, flushed once open
 
 var _next_net_id := 1
 var _tick_acc := 0.0            # fixed-tick accumulator (server only)
@@ -117,6 +122,8 @@ func _ws_join(url: String) -> bool:
 	online = true
 	hosting = false
 	_ws_mode = true
+	_ws_binary = false
+	_ws_hello_sent = false
 	# v1 trust model: the client picks its id and the server trusts it
 	# (netcode auth lands with renet in a later step).
 	_ws_pid = 2 + randi() % 998
@@ -133,6 +140,8 @@ func leave() -> void:
 	online = false
 	hosting = false
 	_ws_mode = false
+	_ws_binary = false
+	_ws_hello_sent = false
 	raid_active = false
 	pending_seed = -1
 	pending_elapsed = 0.0
@@ -266,20 +275,36 @@ func _broadcast_zombie_states() -> void:
 
 func _ws_send(msg: Dictionary) -> void:
 	if _transport != null and _ws_mode:
-		_transport.send_text(JSON.stringify(msg))
+		if _ws_binary:
+			_transport.send_bytes(NetCodec.encode_c2s(msg))
+		else:
+			_transport.send_text(JSON.stringify(msg))
 
 func _ws_pump(_delta: float) -> void:
 	if _transport == null:
 		return
-	for line in _transport.poll_texts():
-		var parsed: Variant = JSON.parse_string(line)
-		if parsed is Dictionary:
-			for variant in parsed:
-				_dispatch_s2c(String(variant), parsed[variant])
-		elif parsed is String:
-			# serde serializes unit variants (RaidFailed/ExtractSuccess/
-			# RaidStarted) as bare JSON strings on the wire
-			_dispatch_s2c(parsed, null)
+	# Wire format v2 upgrade: once the socket opens, flush one binary
+	# Hello{ver:2} — the server flips this connection's downlink to bincode.
+	# The handshake Seed always arrives first as JSON text (we read it with
+	# the JSON path below), so both formats interleave safely.
+	if not _ws_hello_sent and _transport.is_open():
+		_ws_hello_sent = true
+		_ws_binary = true
+		_transport.send_bytes(NetCodec.encode_c2s({"Hello": {"ver": 2}}))
+	for frame in _transport.poll_frames():
+		if frame is PackedByteArray:
+			var decoded: Dictionary = NetCodec.decode_s2c(frame)
+			for variant in decoded:
+				_dispatch_s2c(String(variant), decoded[variant])
+		else:
+			var parsed: Variant = JSON.parse_string(String(frame))
+			if parsed is Dictionary:
+				for variant in parsed:
+					_dispatch_s2c(String(variant), parsed[variant])
+			elif parsed is String:
+				# serde serializes unit variants (RaidFailed/ExtractSuccess/
+				# RaidStarted) as bare JSON strings on the wire
+				_dispatch_s2c(parsed, null)
 	if _transport.is_closed():
 		_transport = null
 		_ws_mode = false
