@@ -9,6 +9,7 @@ const TouchControlsScript := preload("res://game/scripts/touch_controls.gd")
 const ShopMenuScript := preload("res://game/scripts/shop_menu.gd")
 const GreatWallScript := preload("res://game/scripts/greatwall_perimeter.gd")
 const ChineseDistrictScript := preload("res://game/scripts/chinese_district.gd")
+const ChineseFacilityScript := preload("res://game/scripts/chinese_facility.gd")
 const PointerLockScript := preload("res://game/scripts/pointer_lock.gd")
 const TutorialScript := preload("res://game/scripts/tutorial_overlay.gd")
 
@@ -98,6 +99,13 @@ func _build_world() -> void:
 	dungeon_builder.set_script(DungeonBuilderScript)
 	add_child(dungeon_builder)
 	var dungeon: Dictionary = dungeon_builder.build(self, randi())
+
+	# 中式渐进 · 设施篇: 最深处(设施内部)的中式落位, 同样在导航烘焙前
+	var facility := Node.new()
+	facility.name = "ChineseFacility"
+	facility.set_script(ChineseFacilityScript)
+	add_child(facility)
+	facility.build(self, dungeon, randi())
 
 	_seed_spawn_points(info["block_centers"])
 	_setup_navigation()
