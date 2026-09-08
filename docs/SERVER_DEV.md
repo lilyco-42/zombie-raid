@@ -1,7 +1,8 @@
-# 外置专用服务端调研：语言选型 / 协议 / 迁移路径
+# 外置专用服务端调研 v2：Rust 生态 / 协议 / 迁移路径
 
 > 目标：把现在「主机进程内」的权威模拟（`net.gd` ENet 开房模式）拆出进程，
 > 换成**可独立部署的外置服务端**，客户端变成纯接入端。
+> **决策更新（2026-09-08）**：实时性优先 → 服务端语言定案 **Rust**（v1 版的 Go 结论降为备选，对比数据保留在 §2）。
 > 本文是调研与决策记录（design first），动手前先对齐。
 > 前置阅读：`docs/NET_ARCHITECTURE.md`（现有 C/S 架构与快照格式）。
 
@@ -9,42 +10,47 @@
 
 | 项 | 决策 | 一句话理由 |
 |---|---|---|
-| 语言/框架 | **Go + gorilla/websocket**，手写权威循环 | 4 人房间不需要框架；单二进制部署；goroutine 并发模型天然贴合「一连接一协程 + Hub 广播」 |
-| 传输层 | **WebSocket (TCP)**，保留 ENet 作局域网模式 | Godot 原生 `WebSocketPeer` 零依赖；Web 出口友好；4 人规模 TCP 重传代价可忽略 |
-| 序列化 | **开发期 JSON，生产期二进制**（float32 LE 数组 + 可选 protobuf） | 现有丧尸快照 `PackedFloat32Array` 本来就是二进制协议，JSON 只用于调试肉眼可读 |
-| QUIC | **不做** | Godot 未内置（需 GDExtension 封 msquic/quiche）；收益（弱网丢包下的队头阻塞消除）对 4 人合作 PVE 几乎为零 |
-| 服务端框架（Colyseus/Nakama 等） | **不引入** | 房间管理/匹配/账号体系目前都不需要；引入即背上运行时与运维成本 |
-| 权威模型 | **照搬现有 20 TPS 服务端权威**，net.gd 的 14 个 RPC 就是线协议 v1 | 已上线并测试过的协议不需要重设计，只需要「翻译」 |
+| 语言 | **Rust** | 无 GC 尾延迟（tick 预算确定性）；协议 crate 可同时编译进服务端与 Godot 客户端扩展（gdext）→ **协议零漂移**；renet 自带 netcode 加密鉴权 |
+| 网络库（服务端） | **renet**（UDP，renet_netcode 传输层） | 引擎无关（Bevy 插件只是可选层）；通道三档可靠性正好映射我们的快照/事件模型；自带分片重组 + 加密鉴权（netcode 协议） |
+| 客户端接入 v1 | **GDScript WebSocketPeer ↔ tokio-tungstenite** | 不引 GDExtension 就能联调；协议同源；裸 IP 仍走 ENet（局域网零配置不变） |
+| 客户端接入 v2（可选加强） | **gdext 扩展嵌 renet 客户端**（UDP + 加密鉴权，延迟最低） | godot-rust v0.5.x 成熟可用；服务端与客户端共用同一 `protocol` crate |
+| QUIC/WebTransport | **升级线保留**（quinn + web-transport-quinn） | Rust 侧是事实标准（2026-02 仍在活跃发版）；Godot 无内置，等有浏览器端/弱网需求再上 |
+| 序列化 | **快照 float32 原样；事件消息 serde + bincode/postcard** | 低频可靠消息用 Rust serde 单源定义；快照本来就是二进制 |
+| Bevy 服务端 | **不引入** | lightyear/bevy_replicon 只服务 Bevy 客户端，无 Godot 对接；本作服务端是状态机不是 ECS 世界 |
 
-规模预算：1 vCPU / 2GB VPS（≈¥30-70/月）可跑 30-50 人同服
-（本作实际负载：20 TPS tick + 15Hz 快照 ≈ 6 KB/s/客户端，单房 4 人）。
+规模预算：单房 4 人 20 TPS + 15Hz 快照 ≈ 6 KB/s/端，tick 预算 50ms；
+Rust 把 tick 耗时的**尾部**钉死（无 GC STW），1 vCPU / 2GB VPS 余量以百人计。
 
-## 2. 候选栈对比
+## 2. 候选栈对比（v1 数据保留，Go 降为备选）
 
-| 栈 | 并发模型 | 传输/序列化 | 部署 | 与 Godot 契合 | 结论 |
-|---|---|---|---|---|---|
-| **Go**（gorilla/websocket 或 coder/websocket） | goroutine/连接 + channel Hub 广播；`time.Ticker` 50ms 驱动 20 TPS | WS；JSON/protobuf 均成熟 | 单静态二进制，scp 即部署 | `WebSocketPeer` 直连；协议翻译直观 | ✅ **选它** |
-| **Rust**（Renet + Bevy / quinn QUIC） | ECS + 无 GC 抖动 | Renet 走 UDP + bincode；quinn 提供 QUIC | 单二进制 | Renet 无官方 Godot 绑定，协议要自桥 | 性能上限最高，但对 4 人房是杀鸡用牛刀，且迭代成本（借用检查）高 → 备选 |
-| **Node.js**（Colyseus） | 单线程事件循环 + 房间 | WS + Schema 自动 delta 压缩 | `npm` 运行时 + 监控面板 | 客户端有非官方 Godot SDK，质量参差 | 原型最快，但 Schema 序列化反向锁死协议；引入框架违背「薄依赖」偏好 → 不用 |
-| **Nakama** | Go 内核 + 插件 | gRPC/WS | Postgres/CockroachDB + Redis 全家桶 | 有官方 Godot SDK | 账号/好友/排行/匹配一应俱全——本作现在**都不需要** → 不用 |
-| **SpacetimeDB** | 「数据库即世界」 | WS + 自动状态同步 | 新锐运行时 | C#/Rust 客户端，Godot 支持弱 | 理念超前但生态早期，赌不起 → 观望 |
-| **Agones**（K8s） | 游戏服生命周期编排 | 不关心 | K8s 集群 | 无关 | 单服都还没部署就上编排是负 ROI → 多服舰之后再回来看 |
-| 托管（Photon/PlayFab） | — | — | 云服务 | — | 付费 + 锁定 + 数据出海问题 → 不用 |
+| 栈 | 并发模型 | 传输/序列化 | 部署 | 结论 |
+|---|---|---|---|---|
+| **Rust**（renet / quinn / tokio） | 无 GC，tick 尾延迟确定；renet 自带加密鉴权 | UDP netcode / QUIC / WS 全覆盖；serde 单源协议 | 单静态二进制，musl 交叉编译 | ✅ **定案** |
+| Go（gorilla/websocket） | goroutine/连接 + Hub；GC STW <1ms 但 p99 会抖 | WS 为主，QUIC 走 quic-go | 单二进制 | 备选：工程速度最快，但协议无法进 Godot 客户端，实时尾部不如 Rust 确定 |
+| Node.js（Colyseus） | 单线程事件循环 | WS + Schema delta | npm 运行时 | 框架锁协议 → 不用 |
+| Nakama | Go 内核 + 插件 | gRPC/WS | Postgres/Redis 全家桶 | 账号匹配都不需要 → 不用 |
+| SpacetimeDB | 数据库即世界 | WS + 自动同步 | 新锐运行时 | Godot 支持弱 → 观望 |
+| Agones（K8s） | 舰队编排 | 不关心 | K8s | 多服再回来看 |
 
-## 3. QUIC / WebTransport 评估（正面回答）
+## 3. Rust 生态地图（2026-09 实测活跃度）
 
-- **Godot 4.7 内置网络**：ENet（UDP）、WebSocketPeer（TCP）、WebRTC（P2P/DTLS）。
-  **没有 QUIC/WebTransport**。要上 QUIC 只能：GDExtension 封 msquic/quiche/picoquic，
-  或自编译引擎模块——维护成本一次买断。
-- **QUIC 的真实收益**：流级复用消除队头阻塞、0-RTT 重连、连接迁移（切 Wi-Fi 不掉线）。
-  这三项对 **4 人合作 PVE + 15Hz 快照**的体验增益接近 0：我们的快照本来就走
-  unreliable_ordered，丢一帧下一帧就覆盖；掉线重连也可以靠「重新拉种子重建」兜底。
-- **何时重新评估**：① 做 100+ 人大厅；② 手机弱网差评集中在断线重连；
-  ③ Godot 官方合入 WebTransport（届时迁移成本 = 换 transport 实现，见 §5）。
+| crate | 角色 | 状态（截至 2026-09） | 关键点 |
+|---|---|---|---|
+| **renet** (`lucaspoffo/renet`) | UDP 服务端/客户端网络库 | v1.1（2025-08），518 commits；bevy_renet 4.0.1（2026-03） | 通道 `Unreliable` / `ReliableOrdered{resend}` / `ReliableUnordered{resend}`；分片重组；`renet_netcode` 传输层 = netcode 协议（connect token + 加密 + 鉴权）；poll 式 `server.update(dt)` 引擎无关 |
+| renet2 / bevy_renet2 | renet 社区分叉 | 0.14.0（2026-04），bevy_replicon_renet2 底座 | 分叉活跃是双保险；纯服务端用法两边 API 同形，先锁定 `renet` 1.x，需要时迁移成本低 |
+| **tokio + tokio-tungstenite** | WebSocket 路径（v1 主力） | 生态标准 | 服务端 v1 用它接 GDScript `WebSocketPeer`；20 TPS 用 `tokio::time::interval` 或独立 tick 线程 |
+| **quinn** | QUIC 实现 | Rust QUIC 事实标准 | 拥塞控制可选 BBR（低延迟档）；升级线的地基 |
+| **web-transport-quinn** (`kixelated`) | WebTransport 封装 | 0.11.6（2026-02），约 3.7 万下载/月，moq 项目在用 | streams（可靠有序）+ datagrams（不可靠 ~MTU）正好映射事件/快照；另有 webtrans-quinn 0.5（2026-07，带 WASM 端） |
+| **godot-rust gdext** | Rust ↔ Godot 4 绑定 | v0.5.5（2026-08），3.2k commits，MPL-2.0 | 支持 Godot 4.1+（运行时 ≥ API 版本即可）；可与 GDScript 混用；pre-1.0 有破坏性变更风险，锁小版本 |
+| serde + bincode / postcard | 事件消息序列化 | 生态标准 | `protocol` crate 单源定义 14 消息；postcard 走 varint 更省字节；rkyv（零拷贝）暂不需要 |
+| lightyear / bevy_replicon | Bevy 全家桶复制 | 活跃 | ❌ 只服务 Bevy 客户端、服务端要背整个 Bevy App —— 与 Godot 客户端无缘，排除 |
 
-## 4. 线协议 v1 = 现有 14 个 RPC 的翻译
+**Rust 独有卖点（Go 给不了的）**：`protocol` crate 同时被服务端二进制和 gdext 客户端扩展编译——
+协议改动一处，两端编译期同时报错，**杜绝客户端/服务端协议漂移**。
 
-net.gd 里的 RPC 注解已经写明了方向、频率与可靠性，直接映射成消息类型：
+## 4. 线协议 v1 = 现有 14 个 RPC 的翻译（不变）
+
+net.gd 的 RPC 注解已写明方向、频率与可靠性，直接映射成 `protocol` crate 的消息 enum：
 
 ### 客户端 → 服务端
 
@@ -52,10 +58,10 @@ net.gd 里的 RPC 注解已经写明了方向、频率与可靠性，直接映�
 |---|---|---|---|---|
 | `player_state` | 15Hz | 不可靠有序 | pid, pos, yaw, speed, on_floor, crouch | `rpc_player_state` |
 | `hit_zombie` | 事件 | 可靠 | net_id, dmg（服务端限频 20/s、伤害 ≤80、射程 ≤80m） | `rpc_hit_zombie` |
-| `box_taken` | 事件 | 可靠 | pos（服务端按坐标认领，先到先得） | `rpc_box_taken` |
+| `box_taken` | 事件 | 可靠 | pos（按坐标认领，先到先得） | `rpc_box_taken` |
 | `report_extract` | 事件 | 可靠 | in_zone | `rpc_report_extract` |
 | `report_player_died` | 事件 | 可靠 | —（全队共死） | `rpc_report_player_died` |
-| `hello` | 连接时 | 可靠 | 客户端版本、种子确认 | `join_game`/`rpc_seed` 应答 |
+| `hello` | 连接时 | 可靠 | 客户端版本、协议号、种子确认 | `join_game`/`rpc_seed` 应答 |
 
 ### 服务端 → 客户端
 
@@ -71,73 +77,92 @@ net.gd 里的 RPC 注解已经写明了方向、频率与可靠性，直接映�
 | `raid_failed` | 事件 | 可靠 | — | `rpc_raid_failed` |
 | `damage_player` | 事件 | 可靠 | dmg | `rpc_damage_player` |
 
-二进制化路径（生产期）：`zombie_states` 直接沿用 float32 数组；
-其余低频可靠消息 JSON 起步，量大了再上 protobuf（`.proto` 文件放 `server/protocol/`，
-Godot 侧用 `godotobuf` 类插件或手写 varint 编解码——先不做）。
+renet 通道配置直接对号入座：快照走 `Unreliable` 通道，其余全部 `ReliableOrdered`；
+WS 路径用帧头 1 字节消息类型 + 可靠 TCP 自带有序。
 
-## 5. 关键设计：几何留客户端，状态走网络
-
-与现有架构完全一致，外置服务端只是把「主机」换成「无头进程」：
+## 5. 关键设计：几何留客户端，状态走网络（不变）
 
 ```
-外置 Go 服务端（authority, 20 TPS）
+外置 Rust 服务端（authority, 20 TPS, 无 GC 抖动）
 ┌──────────────────────────────────────────┐
+│ renet server + renet_netcode(加密鉴权)     │
 │ world tick: 丧尸 AI / 刷怪 / 计时 / 校验   │
-│ 可走网格 + A*（首个客户端进房时上传）        │   ← 唯一新增：服务端路径规划数据源
-│ Hub: 连接管理 / 房间(4人) / 广播           │
+│ 可走网格 + A*（首个客户端进房时上传）        │
+│ tokio-tungstenite WS 入口（v1, 同端口双栈） │
 └───────────────┬──────────────────────────┘
-     WebSocket  │ seed ──▶ 客户端确定性重建城市
+   UDP(netcode) │ 或 WebSocket
+                │ seed ──▶ 客户端确定性重建城市
                 ◀── player_state 15Hz
                 ──▶ zombie_states 15Hz + 可靠事件
 ┌───────────────┴──────────────────────────┐
 │ Godot 客户端: 城市/渲染/音效/本地预测      │
+│ v1: WebSocketPeer(纯 GDScript)            │
+│ v2: gdext 扩展嵌 renet client(可选加强)    │
 │ net.gd 只换 transport，rpc_* 调用点零改动  │
 └──────────────────────────────────────────┘
 ```
 
 种子协议不变：服务端掷 `raid_seed` → 客户端重建同一座城；
-城市几何、导航烘焙、贴图**不上网络**。可走网格（bool 二维数组，压缩后几十 KB）
-由首个进房客户端上传，服务端只做 A* 查询——避免服务端复刻 CityBuilder。
+城市几何、导航烘焙不上网络；可走网格由首个进房客户端上传，服务端只做 A* 查询。
 
 ## 6. 迁移路径（四步，每步可独立合入）
 
-1. **抽 transport 接口**（纯重构，行为不变）：
+1. **抽 transport 接口**（GDScript 侧纯重构，行为不变）：
    net.gd 内定义 `NetTransport`（`connect/start_host/send_raw/poll/disconnected` 信号），
    现有 ENet 逻辑包成 `EnetTransport`；rpc_* 收发走接口。
-2. **加 WsTransport**：Godot `WebSocketPeer` 实现（内置，零依赖）。
-   `join_game("ws://host:24565")` 走 WS，裸 IP 仍走 ENet（局域网零配置不变）。
-3. **Go 服务端骨架**：`server/` 实现线协议 v1（先用 JSON），
-   丧尸 AI 从 `zombie.gd`/`raid_manager.gd` 移植成 Go（状态机简单，重逻辑轻表现）；
-   `go test` 对拍 GDScript 单测（同一种子 → 同一刷怪序列）。
-4. **生产化**：float32 二进制快照、systemd 部署、`--server` 进程内无头模式退役
-   （被外置服务端替代，保留作为调试用途）。
+2. **WsTransport + Rust 服务端骨架**：
+   `server/` Cargo workspace，tokio-tungstenite 接 GDScript `WebSocketPeer`，
+   `protocol` crate 用 serde 定义 §4 的 14 消息（JSON 起步）；
+   丧尸 AI 从 `zombie.gd`/`raid_manager.gd` 移植成 Rust（状态机简单，重逻辑轻表现）；
+   `cargo test` + Godot headless 测试对拍（同一种子 → 同一刷怪序列）。
+3. **二进制化**：事件消息 serde→bincode/postcard（`protocol` crate 加 feature 即可）；
+   快照维持 float32 数组；WS 帧内自定义 1 字节类型头。
+4. **两条可选升级线**（互不阻塞，按需启用）：
+   - **低延迟线**：gdext 扩展嵌 renet client → UDP + netcode 加密鉴权，
+     客户端延迟与加密一步到位（与现有 ENet 同为 UDP，体验对齐）；
+   - **WebTransport 线**：服务端加 quinn + web-transport-quinn 监听（BBR 拥塞控制），
+     为浏览器端/弱网重连预留——Godot 侧仍走 WS/UDP，不强制迁移。
 
-## 7. `server/` 目标布局（Go）
+## 7. `server/` 目标布局（Cargo workspace）
 
 ```
 server/
-  go.mod
-  main.go          # :24565 监听(WS), 启动 tick
-  hub.go           # 连接生命周期 / 房间(≤4人) / 广播
-  world.go         # 20 TPS 权威循环: 刷怪/AI/命中校验/撤离判定
-  walkable.go      # 可走网格存储 + A*
+  Cargo.toml          # workspace
   protocol/
-    messages.go    # §4 的 14 消息 struct + 编解码
-    (proto 可选)
-  world_test.go    # 同种子确定性对拍
+    src/lib.rs        # §4 的 14 消息 enum + serde 编解码（服务端/gdext 共用）
+  server-bin/
+    src/main.rs       # 监听(WS:24565 / UDP:24566) + 20 TPS tick
+    src/hub.rs        # 连接生命周期 / 房间(≤4人) / 广播
+    src/world.rs      # 刷怪/AI/命中校验/撤离判定
+    src/walkable.rs   # 可走网格存储 + A*
+  server-bin/tests/   # 同种子确定性对拍
+  gdext-transport/    # （可选 v2）renet client 桥 GDScript 的 Godot 扩展
 ```
 
 ## 8. 明确不做的事（本阶段）
 
-- ❌ QUIC/WebTransport（§3，重新评估条件已列）
+- ❌ Bevy 服务端 / lightyear / bevy_replicon（Bevy 客户端专属，无 Godot 对接）
 - ❌ interest management / delta 压缩（4 人 × 14 丧尸 ≈ 6 KB/s，不值）
+- ❌ rkyv 零拷贝、protobuf（serde+bincode 足够，需要再加 feature）
 - ❌ 数据库持久化（stash 仍在客户端；服务端无状态，重启即恢复）
-- ❌ 账号/匹配/大厅（token 白名单起步即可，真需要再评估 Nakama）
-- ❌ 移动端断线重连的 0-RTT 优化（现在的「重拉种子重建」够用）
+- ❌ 账号/匹配/大厅（renet_netcode 的 connect token 已覆盖鉴权起步需求）
 
-## 9. 参考资料
+## 9. 实时性论证（决策依据存档）
 
-- Godot 高层多人 API 与 WebSocketPeer：docs.godotengine.org（Networking）
-- gorilla/websocket（Go 事实标准，已恢复维护）/ coder(websocket) fork
-- Colyseus 文档（房间模型与 Schema delta —— 作为「如果哪天想要框架」的对照）
-- Renet / quinn（Rust 备选）；Nakama（全家桶备选）；Agones（K8s 编排备选）
+- 本作实时性画像：20 TPS tick（50ms 预算）+ 15Hz 快照 + 射击即时命中校验。
+  负载下 Go 也够用——但**尾部延迟**不同：Go 的 GC STW 平时 <1ms，
+  在分配压力大的 tick 会偶发抖动；Rust 无 GC，tick 耗时可证确定，
+  也能安全跑比 20 TPS 更密的模拟（以后要做弹道分帧/更多实体时不用换语言）。
+- Rust 额外拿到三样 Go 没有的：① 协议 crate 进 Godot（gdext）零漂移；
+  ② renet_netcode 的 netcode 加密鉴权开箱即用（Go 侧要自己攒）；
+  ③ QUIC/WebTransport 升级线是一等公民（quinn 生态）。
+- 代价如实记录：编译时间、借用检查迭代税、gdext pre-1.0 锁版本。
+  结论：实时性优先的前提下，这些代价买到的确定性值得。
+
+## 10. 参考资料
+
+- renet（lucaspoffo/renet）README 与 Channel/Transport API；renet2 分叉（lib.rs）
+- web-transport-quinn（kixelated/web-transport-rs）docs.rs 与 DeepWiki 架构页；webtrans-quinn
+- godot-rust gdext：v0.5 发布说明（2026-03）与 compatibility 文档（Godot 4.1+ 运行时规则）
+- lightyear/bevy_replicon 对比（Bevy 生态定位，排除依据）
+- v1 版调研（Go 选型过程与框架评估）见 git 历史：docs/SERVER_DEV.md @ e3fa560
