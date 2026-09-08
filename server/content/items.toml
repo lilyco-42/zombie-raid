@@ -1,0 +1,41 @@
+# items.toml — 物品定义（商业化根基：商店/库存/掉落都指向这里的 id）
+# 10 年契约：id 一经发布永不复用；联动物品 = 追加条目，不改旧条目。
+# kind: currency | consumable | material | weapon | skin
+# shop.price = 0 且 purchasable = false 表示不在商店出售（如掉落货币）。
+schema_version = 1
+
+[[item]]
+id = "coin"
+name = "废料硬币"
+kind = "currency"
+stack_max = 999999
+sellable = false
+deprecated = false
+shop = { price = 0, purchasable = false }
+
+[[item]]
+id = "bandage"
+name = "绷带"
+kind = "consumable"
+stack_max = 20
+sellable = true
+deprecated = false
+shop = { price = 120, purchasable = true }
+
+[[item]]
+id = "ammo_box"
+name = "弹药箱"
+kind = "consumable"
+stack_max = 10
+sellable = true
+deprecated = false
+shop = { price = 250, purchasable = true }
+
+[[item]]
+id = "scrap_metal"
+name = "废金属"
+kind = "material"
+stack_max = 999
+sellable = true
+deprecated = false
+shop = { price = 0, purchasable = false }

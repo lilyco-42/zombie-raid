@@ -14,6 +14,7 @@
 //! - loot boxes are relayed, not tracked (RemoveBox passthrough);
 //! - pid is trusted from the message (netcode auth lands in a later step).
 
+use protocol::content::ContentTables;
 use protocol::{Lcg64, S2C};
 use std::collections::HashMap;
 
@@ -57,9 +58,6 @@ pub fn ztype_stats(ztype: u8) -> (f32, f32, f32, f32) {
     }
 }
 
-/// Spawn weights for the auto-spawner (raid_manager VARIANTS weight col).
-const SPAWN_WEIGHTS: [u32; 3] = [3, 5, 2];
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct Zombie {
     pub id: u32,
@@ -90,10 +88,18 @@ pub struct World {
     snap_seq: u32,
     spawn_acc: f32,
     netstate_acc: f32,
+    /// Content tables (zombie kinds / items / raid rules). Boots on the
+    /// built-in set; hot-reload swaps the Arc (see README_OPS.md T7).
+    pub content: std::sync::Arc<ContentTables>,
 }
 
 impl World {
     pub fn new(seed: u64) -> Self {
+        Self::with_content(seed, std::sync::Arc::new(ContentTables::built_in()))
+    }
+
+    /// Boot the world on an explicit content snapshot (hot-reload path).
+    pub fn with_content(seed: u64, content: std::sync::Arc<ContentTables>) -> Self {
         Self {
             seed,
             tick: 0,
@@ -108,12 +114,23 @@ impl World {
             snap_seq: 0,
             spawn_acc: 0.0,
             netstate_acc: 0.0,
+            content,
         }
     }
 
     // ------------------------------------------------------- inspection --
     pub fn zombies(&self) -> &[Zombie] {
         &self.zombies
+    }
+
+    /// Per-kind stats from the content tables; unknown ids fall back to
+    /// the legacy spitter row (the former `_ =>` arm) so snapshots in
+    /// flight survive a table swap mid-raid.
+    fn zstats(&self, ztype: u8) -> (f32, f32, f32, f32) {
+        match self.content.zombie(ztype) {
+            Some(z) => (z.walk, z.run, z.max_hp, z.damage),
+            None => ztype_stats(ztype),
+        }
     }
 
     pub fn player_count(&self) -> usize {
@@ -133,7 +150,7 @@ impl World {
     /// the reset exhaustive by construction: add a field to World and the
     /// compiler makes you decide whether Self::new resets it.
     pub fn reset(&mut self, seed: u64) {
-        *self = Self::new(seed);
+        *self = Self::with_content(seed, self.content.clone());
     }
 
     /// Hello handler. A Hello during a live raid is a no-op (the Seed
@@ -199,7 +216,13 @@ impl World {
         // Loot drop roll mirrors raid_manager._on_zombie_died:
         // 30% chance of 30 + randi()%50; drawn from the LCG for determinism.
         let roll = self.rng.next_u31();
-        let drop_value = if roll % 100 < 30 { 30 + (roll % 50) as i32 } else { 0 };
+        let loot = &self.content.raid.loot;
+        let span = (loot.coin_amount_max - loot.coin_amount_min + 1) as u32;
+        let drop_value = if roll % 100 < loot.coin_chance_pct {
+            loot.coin_amount_min + (roll % span) as i32
+        } else {
+            0
+        };
         vec![S2C::ZombieDead {
             net_id: z.id,
             pos: z.pos,
@@ -278,7 +301,7 @@ impl World {
 
         // ---- zombie AI (zombie.gd _physics_process, host path) -----------
         for i in 0..self.zombies.len() {
-            let (_walk, run, _hp, dmg) = ztype_stats(self.zombies[i].ztype);
+            let (_walk, run, _hp, dmg) = self.zstats(self.zombies[i].ztype);
             // cooldown / pending swing timers first
             self.zombies[i].attack_cd = (self.zombies[i].attack_cd - dt).max(0.0);
             if let Some((pid, t)) = self.zombies[i].hit_pending {
@@ -398,20 +421,24 @@ impl World {
 
     /// Weighted variant roll (raid_manager._pick_variant_index).
     fn pick_variant(&mut self) -> u8 {
-        let total: u32 = SPAWN_WEIGHTS.iter().sum();
+        let weights = self.content.spawn_weights();
+        let total: u32 = weights.iter().map(|e| e.1).sum();
+        if total == 0 {
+            return 0;
+        }
         let mut roll = self.rng.next_u31() % total;
-        for (i, w) in SPAWN_WEIGHTS.iter().enumerate() {
+        for (zt, w) in &weights {
             if roll < *w {
-                return i as u8;
+                return *zt;
             }
-            roll -= w;
+            roll -= *w;
         }
         0
     }
 
     /// Test/spawn helper: register a zombie of `ztype` at `pos`.
     pub fn force_spawn(&mut self, ztype: u8, pos: [f32; 3]) -> u32 {
-        let (_walk, _run, hp, _dmg) = ztype_stats(ztype);
+        let (_walk, _run, hp, _dmg) = self.zstats(ztype);
         let id = self.next_id;
         self.next_id += 1;
         self.zombies.push(Zombie {

@@ -1,0 +1,44 @@
+# zombies.toml — 丧尸变体定义（服务端权威数值）
+# 10 年契约：id 一经发布永不复用、永不改含义；下架用 deprecated = true，不删行。
+# spitter（id=3）历史上不在自动刷怪权重表里，spawn_weight = 0 表示不参与权重抽取。
+schema_version = 1
+
+[[zombie]]
+id = 0
+key = "runner"
+name = "疾行者"
+walk = 2.2
+run = 5.4
+max_hp = 40.0
+damage = 10.0
+spawn_weight = 3
+
+[[zombie]]
+id = 1
+key = "walker"
+name = "游荡者"
+walk = 1.7
+run = 4.0
+max_hp = 60.0
+damage = 15.0
+spawn_weight = 5
+
+[[zombie]]
+id = 2
+key = "brute"
+name = "巨力者"
+walk = 1.3
+run = 3.1
+max_hp = 150.0
+damage = 26.0
+spawn_weight = 2
+
+[[zombie]]
+id = 3
+key = "spitter"
+name = "喷吐者"
+walk = 1.3
+run = 3.4
+max_hp = 45.0
+damage = 12.0
+spawn_weight = 0      # 0 = 不进自动刷怪权重表（保持与现网一致）

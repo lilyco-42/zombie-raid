@@ -10,6 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod content;
+
 pub const PROTOCOL_ID: u32 = 2;
 pub const DEFAULT_PORT: u16 = 24565;
 

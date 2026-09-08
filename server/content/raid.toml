@@ -1,0 +1,26 @@
+# raid.toml — 突袭规则（运营可调参数面）
+# 数值 1:1 复刻 world.rs 原有常量（迁移基线）；调整这里 = 调整全服规则。
+# 同 seed 对拍原则：改这张表会改变刷怪/掉落序列，CI 必须重跑确定性回归。
+schema_version = 1
+
+[spawning]
+interval_start = 5.0     # 开局刷怪间隔（秒）
+interval_end = 2.2       # ramp 结束时的间隔
+max_alive_start = 6.0
+max_alive_end = 14.0
+ramp_seconds = 360.0
+min_spawn_dist = 18.0
+
+[clock]
+run_limit = 480.0        # 月离场（frenzy 开始）
+frenzy_grace = 90.0      # frenzy 缓冲，超时即团灭
+
+[hit_rules]
+max_rate = 20.0          # 命中上报限频（次/秒）
+max_damage = 80.0        # 单发伤害 clamp
+max_range = 80.0         # 射程 clamp（米）
+
+[loot]                   # 1:1 复刻原 drop 规则：30% 概率掉 30+r%50 枚硬币
+coin_chance_pct = 30
+coin_amount_min = 30
+coin_amount_max = 79
