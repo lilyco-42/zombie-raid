@@ -16,3 +16,6 @@ mono_crash.*.json
 
 # Python bytecode (import build_chinese 等触发)
 __pycache__/
+
+# Player database (runtime state, never versioned)
+/data/

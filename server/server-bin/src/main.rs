@@ -13,6 +13,7 @@
 //! connection task. The broadcast channel carries S2C VALUES — each
 //! connection serializes to its own format at flush time.
 
+mod player_repo;
 mod world;
 
 use futures_util::{SinkExt, StreamExt};
@@ -27,7 +28,20 @@ const SEED: u64 = 42; // TODO: pass via CLI arg / room config
 #[tokio::main]
 async fn main() {
     let (tx, _rx) = broadcast::channel::<S2C>(256);
-    let world = Arc::new(Mutex::new(world::World::new(SEED)));
+    // Boot persistence (README_OPS.md T6): the player ledger survives
+    // restarts. Session state stays in-memory inside World; every ledger
+    // mutation is written through to SQLite.
+    let repo: Arc<dyn player_repo::PlayerRepo> = {
+        std::fs::create_dir_all("data").expect("create data dir");
+        let db = player_repo::SqlitePlayerRepo::open("data/players.db")
+            .expect("open data/players.db");
+        Arc::new(db)
+    };
+    let world = Arc::new(Mutex::new(world::World::with_repo(
+        SEED,
+        Arc::new(protocol::content::ContentTables::built_in()),
+        repo,
+    )));
 
     // Authority heartbeat: 20 TPS fixed tick (Minecraft-style), exactly like
     // net.gd _server_tick() on the host today.

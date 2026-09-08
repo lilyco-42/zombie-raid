@@ -18,6 +18,8 @@ use protocol::content::ContentTables;
 use protocol::{Lcg64, S2C};
 use std::collections::HashMap;
 
+use crate::player_repo::PlayerRepo;
+
 // ---- pace constants (raid_manager.gd) -----------------------------------
 pub const SPAWN_INTERVAL_START: f32 = 5.0;
 pub const SPAWN_INTERVAL_END: f32 = 2.2;
@@ -92,8 +94,12 @@ pub struct World {
     /// built-in set; hot-reload swaps the Arc (see README_OPS.md T7).
     pub content: std::sync::Arc<ContentTables>,
     /// Server-authoritative session ledger: pid -> item_id -> count.
-    /// Drop credits and purchases land here; T6 persists via PlayerRepo.
+    /// Drop credits and purchases land here; every mutation is also
+    /// written through to `repo` when one is attached (T6, main.rs).
     inventory: HashMap<u32, HashMap<String, i64>>,
+    /// Persistence seam (README_OPS.md T6). None in most unit tests
+    /// (in-memory ledger only); main.rs attaches a SQLite repo.
+    pub repo: Option<std::sync::Arc<dyn PlayerRepo>>,
 }
 
 impl World {
@@ -103,6 +109,23 @@ impl World {
 
     /// Boot the world on an explicit content snapshot (hot-reload path).
     pub fn with_content(seed: u64, content: std::sync::Arc<ContentTables>) -> Self {
+        Self::base(seed, content, None)
+    }
+
+    /// Boot with a persistence backend attached (README_OPS.md T6).
+    pub fn with_repo(
+        seed: u64,
+        content: std::sync::Arc<ContentTables>,
+        repo: std::sync::Arc<dyn PlayerRepo>,
+    ) -> Self {
+        Self::base(seed, content, Some(repo))
+    }
+
+    fn base(
+        seed: u64,
+        content: std::sync::Arc<ContentTables>,
+        repo: Option<std::sync::Arc<dyn PlayerRepo>>,
+    ) -> Self {
         Self {
             seed,
             tick: 0,
@@ -119,6 +142,7 @@ impl World {
             netstate_acc: 0.0,
             content,
             inventory: HashMap::new(),
+            repo,
         }
     }
 
@@ -154,7 +178,9 @@ impl World {
     /// the reset exhaustive by construction: add a field to World and the
     /// compiler makes you decide whether Self::new resets it.
     pub fn reset(&mut self, seed: u64) {
+        let repo = self.repo.take();
         *self = Self::with_content(seed, self.content.clone());
+        self.repo = repo; // persistence outlives raids (ledger is not session state)
     }
 
     /// Hello handler. A Hello during a live raid is a no-op (the Seed
@@ -207,6 +233,12 @@ impl World {
         if bag.get(item_id).copied().unwrap_or(0) <= 0 {
             bag.remove(item_id);
         }
+        // Write-through (README_OPS.md T6): the ledger must not vanish
+        // with the session (invariant 5 — sessions are droppable, the
+        // ledger is not). The repo mirrors the in-memory cleanup rule.
+        if let Some(repo) = &self.repo {
+            repo.add_item(pid, item_id, delta);
+        }
     }
 
     /// C2S::BuyItem - server-authoritative purchase (README_OPS.md T5).
@@ -226,11 +258,17 @@ impl World {
         }
         let coin = self.coin_id().to_string();
         let price = def.shop.price as i64;
-        if self.balance(pid, &coin) < price {
+        let coins_before = self.balance(pid, &coin);
+        if coins_before < price {
             return vec![S2C::TradeError { pid, reason: "insufficient coins".into() }];
         }
         self.add_item(pid, &coin, -price);
         self.add_item(pid, item_id, 1);
+        // audit trail (README_OPS.md T6): every accepted trade lands in
+        // purchases so dup-exploit forensics stay answerable in year 10
+        if let Some(repo) = &self.repo {
+            repo.record_purchase(pid, item_id, price, coins_before);
+        }
         let coin_bal = self.balance(pid, &coin);
         let bought = self.balance(pid, item_id);
         vec![
@@ -1010,5 +1048,84 @@ mod shop_tests {
         w.handle(&C2S::ReportPlayerDied);
         let out = w.handle(&C2S::BuyItem { pid: 2, item_id: "bandage".into() });
         assert!(matches!(&out[..], [S2C::TradeError { reason, .. }] if reason == "raid is over"));
+    }
+}
+
+#[cfg(test)]
+mod repo_tests {
+    //! T6: write-through persistence (README_OPS.md). The in-session
+    //! ledger stays the read path; these tests pin that every mutation
+    //! also lands in the PlayerRepo and survives a raid reset.
+
+    use super::*;
+    use crate::player_repo::{PlayerRepo, SqlitePlayerRepo};
+    use protocol::C2S;
+
+    fn w_with_repo(repo: std::sync::Arc<dyn PlayerRepo>) -> World {
+        let mut w = World::with_repo(
+            42,
+            std::sync::Arc::new(ContentTables::built_in()),
+            repo,
+        );
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        w
+    }
+
+    #[test]
+    fn kill_credits_persist_through_repo() {
+        let repo = std::sync::Arc::new(SqlitePlayerRepo::in_memory().unwrap());
+        let mut w = w_with_repo(repo.clone());
+        let id = w.force_spawn(1, [5.0, 0.0, 0.0]);
+        let coin = w.coin_id().to_string();
+        let msgs = w.validate_hit(2, id, 80.0); // kills the 60hp walker
+        let drop = match &msgs[..] {
+            [S2C::ZombieDead { drop_value, .. }] => *drop_value as i64,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(repo.balance(2, &coin), drop, "repo mirrors the drop roll");
+    }
+
+    #[test]
+    fn purchase_writes_flow_record() {
+        let repo = std::sync::Arc::new(SqlitePlayerRepo::in_memory().unwrap());
+        let mut w = w_with_repo(repo.clone());
+        let coin = w.coin_id().to_string();
+        w.add_item(2, &coin, 1000);
+        w.handle(&C2S::BuyItem { pid: 2, item_id: "bandage".into() });
+        assert_eq!(
+            repo.purchases(2),
+            vec![("bandage".into(), 120, 1000)],
+            "accepted trades land in the purchases audit trail"
+        );
+        assert_eq!(repo.balance(2, &coin), 880);
+        assert_eq!(repo.balance(2, "bandage"), 1);
+    }
+
+    #[test]
+    fn reset_keeps_repo_attached_and_data() {
+        let repo = std::sync::Arc::new(SqlitePlayerRepo::in_memory().unwrap());
+        let mut w = w_with_repo(repo.clone());
+        let coin = w.coin_id().to_string();
+        w.add_item(2, &coin, 777);
+        w.reset(100);
+        assert!(w.repo.is_some(), "reset must not drop the repo");
+        assert_eq!(
+            repo.balance(2, &coin),
+            777,
+            "ledger data survives the raid reset (invariant 5)"
+        );
+        // the NEW world still writes through
+        w.add_item(2, "bandage", 2);
+        assert_eq!(repo.balance(2, "bandage"), 2);
+    }
+
+    #[test]
+    fn rejected_trade_writes_nothing() {
+        let repo = std::sync::Arc::new(SqlitePlayerRepo::in_memory().unwrap());
+        let mut w = w_with_repo(repo.clone());
+        w.handle(&C2S::BuyItem { pid: 2, item_id: "bandage".into() }); // zero coins
+        assert!(repo.purchases(2).is_empty());
+        assert_eq!(repo.balance(2, "bandage"), 0);
+        assert_eq!(repo.balance(2, &w.coin_id()), 0);
     }
 }
