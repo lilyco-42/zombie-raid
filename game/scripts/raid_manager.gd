@@ -72,6 +72,8 @@ func setup(world_ref: Node3D, player_ref: Node3D, block_centers: Array, dungeon:
 	world.add_child(hud)
 	if player.has_signal("player_died"):
 		player.player_died.connect(_on_player_died)
+	Net.raid_failed_net.connect(net_raid_failed)
+	Net.extract_success_net.connect(net_extract_success)
 	_last_health = player.current_health
 	hud.set_health(player.current_health, player.max_health)
 	hud.set_status(run_loot, Stash.banked_loot, kills, Stash.quota)
@@ -214,6 +216,12 @@ func _trigger_frenzy() -> void:
 	for z in get_tree().get_nodes_in_group("zombie"):
 		z.frenzy()
 
+func net_sync_clock(net_elapsed: float, frenzy_now: bool) -> void:
+	## Client: 1 Hz host broadcast keeps the raid clock + frenzy phase in sync
+	elapsed = net_elapsed
+	if frenzy_now and not _frenzy:
+		_trigger_frenzy()
+
 func _difficulty() -> float:
 	return clampf(elapsed / RAMP_SECONDS, 0.0, 1.0)
 
@@ -223,18 +231,20 @@ func _current_interval() -> float:
 func _current_max_alive() -> int:
 	return int(lerpf(MAX_ALIVE_START, MAX_ALIVE_END, _difficulty()))
 
-func _pick_variant() -> Dictionary:
+func _pick_variant_index() -> int:
 	var total := 0
 	for v in VARIANTS:
 		total += int(v["weight"])
 	var roll := randi() % total
-	for v in VARIANTS:
-		roll -= int(v["weight"])
+	for i in VARIANTS.size():
+		roll -= int(VARIANTS[i]["weight"])
 		if roll < 0:
-			return v
-	return VARIANTS[0]
+			return i
+	return 0
 
 func _run_spawner() -> void:
+	if Net.online and not Net.is_host():
+		return  # clients only mirror zombies; the host spawns for everyone
 	var map_rid: RID = world.get_world_3d().navigation_map
 	# Wait for the navmesh (max 10s); after that zombies fall back to direct steering
 	var waited := 0.0
@@ -264,6 +274,16 @@ func _spawn_zombie() -> void:
 	_spawn_zombie_at(chosen.global_position + Vector3(randf_range(-1.5, 1.5), 0.2, randf_range(-1.5, 1.5)))
 
 func _spawn_spitter_at(pos: Vector3) -> void:
+	var spitter: CharacterBody3D = _make_spitter()
+	if Net.online:
+		spitter.net_id = Net.next_net_id()
+		spitter.name = "Z_%d" % spitter.net_id
+	world.add_child(spitter)
+	spitter.global_position = pos
+	spitter.died.connect(_on_zombie_died.bind(spitter))
+	alive += 1
+
+func _make_spitter() -> CharacterBody3D:
 	var spitter: CharacterBody3D = ZombieScene.instantiate()
 	spitter.set_script(SpitterScript)
 	spitter.model_path = SPITTER_MODEL
@@ -273,14 +293,15 @@ func _spawn_spitter_at(pos: Vector3) -> void:
 	spitter.attack_damage = 12.0
 	spitter.body_height = 1.75
 	spitter.tint = Color(0.75, 0.6, 1.0)
-	world.add_child(spitter)
-	spitter.global_position = pos
-	spitter.died.connect(_on_zombie_died)
-	alive += 1
+	spitter.ztype = 3
+	return spitter
 
-func _spawn_zombie_at(pos: Vector3) -> void:
-	var variant := _pick_variant()
+func _spawn_zombie_at(pos: Vector3, variant_idx := -1) -> void:
+	if variant_idx < 0:
+		variant_idx = _pick_variant_index()
+	var variant: Dictionary = VARIANTS[variant_idx]
 	var zombie: CharacterBody3D = ZombieScene.instantiate()
+	zombie.ztype = variant_idx
 	zombie.model_path = variant["model"]
 	zombie.max_health = variant["health"]
 	zombie.walk_speed = variant["walk"]
@@ -288,22 +309,64 @@ func _spawn_zombie_at(pos: Vector3) -> void:
 	zombie.attack_damage = variant["damage"]
 	zombie.body_height = variant["height"]
 	zombie.tint = variant["tint"]
+	if Net.online:
+		zombie.net_id = Net.next_net_id()
+		zombie.name = "Z_%d" % zombie.net_id
 	world.add_child(zombie)
 	zombie.global_position = pos
-	zombie.died.connect(_on_zombie_died)
+	zombie.died.connect(_on_zombie_died.bind(zombie))
 	alive += 1
 	if _frenzy:
 		zombie.frenzy()
 	if variant["name"] == "Brute":
 		hud.show_message("A BRUTE is out there...", 1.5)
 
-func _on_zombie_died(at_position: Vector3) -> void:
+func net_spawn_mirror(id: int, pos: Vector3, type: int) -> void:
+	## Client side: the host broadcast mentioned a zombie we don't have yet
+	if _zombie_by_net_id(id) != null:
+		return
+	var zombie: CharacterBody3D
+	if type == 3:
+		zombie = _make_spitter()
+	else:
+		var v: Dictionary = VARIANTS[clampi(type, 0, VARIANTS.size() - 1)]
+		zombie = ZombieScene.instantiate()
+		zombie.ztype = clampi(type, 0, VARIANTS.size() - 1)
+		zombie.model_path = v["model"]
+		zombie.max_health = v["health"]
+		zombie.walk_speed = v["walk"]
+		zombie.run_speed = v["run"]
+		zombie.attack_damage = v["damage"]
+		zombie.body_height = v["height"]
+		zombie.tint = v["tint"]
+	zombie.net_id = id
+	zombie.name = "Z_%d" % id
+	zombie._has_net = true  # skip the spawn intro; drives interpolation playback
+	world.add_child(zombie)
+	zombie.global_position = pos
+	alive += 1
+
+func _zombie_by_net_id(id: int) -> Node:
+	return world.get_node_or_null(NodePath("Z_%d" % id))
+
+func _on_zombie_died(at_position: Vector3, z: Node = null) -> void:
 	alive = maxi(alive - 1, 0)
 	kills += 1
 	Stash.lifetime_kills += 1
 	hud.set_status(run_loot, Stash.banked_loot, kills, Stash.quota)
+	var drop_value := 0
 	if randf() < 0.3:
-		_spawn_loot_box(at_position, 30 + randi() % 50)
+		drop_value = 30 + randi() % 50
+		_spawn_loot_box(at_position, drop_value)
+	if Net.online and z != null and int(z.get("net_id")) > 0:
+		Net.rpc("rpc_zombie_dead", int(z.get("net_id")), at_position, drop_value)
+
+func net_on_zombie_dead(pos: Vector3, drop_value: int) -> void:
+	## Client side: the host reports a zombie died (kill credit + loot mirror)
+	kills += 1
+	hud.set_status(run_loot, Stash.banked_loot, kills, Stash.quota)
+	if drop_value > 0:
+		_spawn_loot_box(pos, drop_value)
 
 func _connect_ammo_hud() -> void:
 	var wm := player.find_child("Weapons_Manager", true, false)
@@ -353,6 +416,7 @@ func _spawn_relic(pos: Vector3, value: int) -> void:
 	box.collected.connect(_on_loot_collected)
 
 func _on_loot_collected(value: int, box: Area3D) -> void:
+	Net.claim_box(box.global_position)  # first taker wins; no-op offline
 	if box.get("kind") == "medkit":
 		hud.show_message("+ %d HP" % int(box.get("heal_amount")), 1.0)
 	else:
@@ -389,7 +453,34 @@ func _spawn_extraction_zone(pos: Vector3) -> void:
 		_extract_hum.play()
 
 func _extract_success() -> void:
+	## Local player finished the extraction timer. Online: host broadcasts
+	## team success; clients report to the host who then broadcasts.
+	if _run_over:
+		return
 	_run_over = true
+	_stash_extraction()
+	if Net.online:
+		if Net.is_host():
+			Net.rpc("rpc_extract_success")
+		else:
+			Net.rpc("rpc_report_extract", true)
+	_end_raid()
+
+func net_extract_success() -> void:
+	## Received: someone on the team extracted — bank your own loot too
+	if _run_over:
+		return
+	_run_over = true
+	_stash_extraction()
+	_end_raid()
+
+func net_extract_report() -> void:
+	## Host: a client reports a completed extraction -> team success
+	if _run_over:
+		return
+	_extract_success()
+
+func _stash_extraction() -> void:
 	Stash.banked_loot += run_loot
 	Stash.successful_extractions += 1
 	Sfx.extract_success()
@@ -399,6 +490,8 @@ func _extract_success() -> void:
 		Stash.quota *= 2
 		quota_msg = "  QUOTA MET — doubled to $%d!" % Stash.quota
 	hud.show_message("EXTRACTION SUCCESSFUL  +$%d  (stash $%d / quota $%d)%s" % [run_loot, Stash.banked_loot, Stash.quota, quota_msg], 4.0)
+
+func _end_raid() -> void:
 	await get_tree().create_timer(4.0).timeout
 	get_tree().reload_current_scene()
 
@@ -406,13 +499,31 @@ func _on_player_died() -> void:
 	if _run_over:
 		return
 	_run_over = true
+	_raid_fail_ui("died")
+	if Net.online:
+		if Net.is_host():
+			Net.rpc("rpc_raid_failed")
+		else:
+			Net.rpc("rpc_report_player_died")
+	_end_raid()
+
+func net_raid_failed() -> void:
+	## Received: a teammate died — the whole team loses the run
+	if _run_over:
+		return
+	_run_over = true
+	_raid_fail_ui("teammate")
+	_end_raid()
+
+func _raid_fail_ui(cause: String) -> void:
 	_run_loot_lost()
 	Sfx.raid_failed()
 	hud.set_extraction(false, 0.0)
-	hud.show_message(I18n.t("died"), 4.0)
+	if cause == "teammate":
+		hud.show_message("A TEAMMATE DIED — RAID FAILED", 4.0)
+	else:
+		hud.show_message(I18n.t("died"), 4.0)
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
-	await get_tree().create_timer(4.0).timeout
-	get_tree().reload_current_scene()
 
 func _run_loot_lost() -> void:
 	pass  # dying simply discards run_loot; stash stays untouched

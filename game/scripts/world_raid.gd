@@ -16,8 +16,45 @@ const TutorialScript := preload("res://game/scripts/tutorial_overlay.gd")
 @onready var manager: Node = $Manager
 var shop: CanvasLayer
 var pointer_lock: Node
+var _waiting_for_seed := false
+var _wait_overlay: CanvasLayer
 
 func _ready() -> void:
+	Net.world = self
+	if not _sync_net_seed():
+		return  # unseeded client: hold until the host's seed arrives
+	_build_world()
+
+func _sync_net_seed() -> bool:
+	## Deterministic world: everyone builds from the host's seed.
+	## Returns false when a client must wait for its seed (shows an overlay).
+	if not Net.online:
+		return true
+	if Net.is_host():
+		Net.raid_seed = randi()
+		seed(Net.raid_seed)
+		Net.rpc("rpc_seed", Net.raid_seed, 0.0)
+		return true
+	if Net.pending_seed >= 0:
+		Net.raid_seed = Net.pending_seed
+		Net.pending_seed = -1
+		seed(Net.raid_seed)
+		return true
+	_waiting_for_seed = true
+	_show_wait_overlay()
+	return false
+
+func _show_wait_overlay() -> void:
+	_wait_overlay = CanvasLayer.new()
+	_wait_overlay.layer = 95
+	var lbl := Label.new()
+	lbl.text = "WAITING FOR HOST — syncing world seed..."
+	lbl.set_anchors_preset(Control.PRESET_CENTER)
+	lbl.position = Vector2(0, -40)
+	_wait_overlay.add_child(lbl)
+	add_child(_wait_overlay)
+
+func _build_world() -> void:
 	player.add_to_group("player")
 	var avatar: Node3D = AvatarScript.new()
 	avatar.name = "PlayerAvatar"
@@ -65,7 +102,37 @@ func _ready() -> void:
 	_seed_spawn_points(info["block_centers"])
 	_setup_navigation()
 	manager.setup(self, player, info["block_centers"], dungeon)
-	_open_shop()
+	Net.spawn_remote_avatars()
+	if Net.online and not Net.is_host():
+		# Late join: the raid is already running on the host
+		manager.elapsed = Net.pending_elapsed
+		Net.pending_elapsed = 0.0
+	if Net.online and not Net.is_host() and manager.elapsed > 1.0:
+		_apply_upgrades()  # raid in progress: skip the shop, go straight in
+	else:
+		_open_shop()
+	var lobby := CanvasLayer.new()
+	lobby.name = "NetLobby"
+	lobby.set_script(load("res://game/scripts/net_lobby.gd"))
+	add_child(lobby)
+
+func _process(_delta: float) -> void:
+	if _waiting_for_seed:
+		if not Net.online:
+			# Host gave up while we waited: play solo
+			_waiting_for_seed = false
+			if _wait_overlay:
+				_wait_overlay.queue_free()
+				_wait_overlay = null
+			_build_world()
+		elif Net.pending_seed >= 0:
+			get_tree().reload_current_scene()
+		return
+	if Net.online and player != null:
+		var hv := Vector3(player.velocity.x, 0, player.velocity.z)
+		Net.push_player_state(
+			player.global_position, player.global_rotation.y, hv.length(),
+			player.is_on_floor(), bool(player.get("crouched")))
 
 func _open_shop() -> void:
 	## Between-raid shop: world is built and paused behind it; DEPLOY resumes.
@@ -91,6 +158,10 @@ func _apply_upgrades() -> void:
 	if Stash.upgrade_level("medkit") > 0:
 		# A free medkit box lands at your feet — save it for deep in the raid
 		manager._spawn_medkit(player.global_position + Vector3(1.5, 0, 0))
+	if Net.online:
+		Net.raid_active = true
+		if Net.is_host():
+			Net.rpc("rpc_raid_started")
 	_show_tutorial()
 
 func _show_tutorial() -> void:

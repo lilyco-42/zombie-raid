@@ -26,6 +26,10 @@ signal died(at_position: Vector3)
 var state: int = State.SPAWNING
 var health: float
 var home_position: Vector3
+var net_id := 0                # >0 once the host registers this zombie online
+var ztype := 0                 # 0..2 = VARIANTS index, 3 = spitter (mirrored on clients)
+var _has_net := false
+var _net_buf: Array = []       # snapshot ring: {seq, pos, yaw, code} (MC-style)
 var _wander_timer := 0.0
 var _attack_timer := 0.0
 var _growl_timer := 0.0
@@ -53,8 +57,14 @@ func _ready() -> void:
 		anim.animation_finished.connect(_on_animation_finished)
 	_enter_spawn()
 
+func is_dead() -> bool:
+	return state == State.DEAD
+
 func _physics_process(delta: float) -> void:
 	if state == State.DEAD:
+		return
+	if Net.online and not Net.is_host():
+		_net_physics(delta)
 		return
 	_attack_timer = maxf(_attack_timer - delta, 0.0)
 	_growl_timer -= delta
@@ -221,6 +231,11 @@ func _on_animation_finished(anim_name: StringName) -> void:
 			t.timeout.connect(queue_free)
 
 func _enter_spawn() -> void:
+	# Network mirrors skip the crawl-out intro: they are spawned mid-raid
+	if _has_net:
+		state = State.WANDER
+		_wander_timer = 0.0
+		return
 	# Rise from the ground: zombie crawl-out intro, invulnerable-ish while spawning
 	nav_agent.target_position = home_position
 	if anim and anim.has_animation("Spawn_Ground"):
@@ -230,11 +245,102 @@ func _enter_spawn() -> void:
 		state = State.WANDER
 
 func _find_player() -> Node3D:
-	return get_tree().get_first_node_in_group("player") as Node3D
+	## Host: nearest of (local player, remote avatars) — zombies threaten everyone.
+	## Client/offline: the local player.
+	var local := get_tree().get_first_node_in_group("player") as Node3D
+	if not (Net.online and Net.is_host()):
+		return local
+	var best := local
+	var best_d := INF
+	if local != null:
+		best_d = global_position.distance_to(local.global_position)
+	for r in get_tree().get_nodes_in_group("remote_player"):
+		var d: float = global_position.distance_to(r.global_position)
+		if d < best_d:
+			best_d = d
+			best = r
+	return best
+
+# --- Network mirror (clients only) ---
+const NET_BUFFER := 8          # interpolation buffer depth (snapshots)
+const NET_DELAY := 3.0         # render N snapshots behind the host (MC lerpSteps=3)
+
+func net_update(pos: Vector3, yaw: float, code: int, seq: int) -> void:
+	## Host snapshot (15 Hz, sequence-numbered) -> interpolation buffer.
+	## Like MC: the client never runs zombie AI, it replays buffered states.
+	_has_net = true
+	if _net_buf.is_empty():
+		global_position = pos  # first sighting: snap
+	_net_buf.append({"seq": seq, "pos": pos, "yaw": yaw, "code": code})
+	while _net_buf.size() > NET_BUFFER:
+		_net_buf.pop_front()
+
+func _net_physics(_delta: float) -> void:
+	## MC entity interpolation: play the buffer INTERP_SNAPSHOTS samples in
+	## the past, lerping between the two snapshots that straddle the playhead.
+	if not _has_net or _net_buf.is_empty():
+		return
+	var target := float(_net_buf[_net_buf.size() - 1]["seq"]) - NET_DELAY
+	var s0: Dictionary = _net_buf[0]
+	var s1: Dictionary = s0
+	for i in _net_buf.size():
+		if float(_net_buf[i]["seq"]) <= target:
+			s0 = _net_buf[i]
+			s1 = _net_buf[i + 1] if i + 1 < _net_buf.size() else _net_buf[i]
+	var alpha := 0.0
+	if float(s1["seq"]) > float(s0["seq"]):
+		alpha = clampf((target - float(s0["seq"])) / (float(s1["seq"]) - float(s0["seq"])), 0.0, 1.0)
+	var pos: Vector3 = s0["pos"].lerp(s1["pos"], alpha)
+	if global_position.distance_to(pos) > 10.0:
+		global_position = pos  # teleport / long stall: snap
+	else:
+		global_position = pos
+	model.rotation.y = lerp_angle(s0["yaw"], s1["yaw"], alpha)
+	if anim:
+		match int(s1["code"]):
+			4:
+				_net_play("Unarmed_Melee_Attack_Punch_A", 1.0)
+			2:
+				_net_play("Running_A", clampf(run_speed / 2.0, 0.7, 1.8))
+			_:
+				_net_play("Idle", 1.0)
+
+func _net_play(anim_name: String, speed: float) -> void:
+	if anim.current_animation != anim_name and anim.has_animation(anim_name):
+		anim.play(anim_name)
+		anim.speed_scale = speed
+
+func apply_net_damage(dmg: float) -> void:
+	## Host: damage reported by a client's bullet
+	if state == State.DEAD:
+		return
+	health -= dmg
+	if health <= 0.0:
+		_die()
+
+func net_die() -> void:
+	## Client: the host reports this zombie died — play the death, drop nothing
+	## (loot arrives via the manager's net path)
+	if state == State.DEAD:
+		return
+	state = State.DEAD
+	remove_from_group("Target")
+	collision_layer = 0
+	collision_mask = 0
+	Sfx.zombie_death(global_position)
+	if anim:
+		anim.speed_scale = 1.0
+		anim.play("Death_A" if anim.has_animation("Death_A") else "T-Pose")
 
 # --- Template projectile interface ---
 func Hit_Successful(damage: float, _Direction: Vector3 = Vector3.ZERO, _Position: Vector3 = Vector3.ZERO) -> void:
 	if state == State.DEAD:
+		return
+	if Net.online and not Net.is_host():
+		# Client: the host owns zombie health — report the hit, play feedback
+		if net_id > 0:
+			Net.rpc("rpc_hit_zombie", net_id, damage)
+			Sfx.flesh_hit(global_position)
 		return
 	health -= damage
 	Sfx.flesh_hit(global_position)

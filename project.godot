@@ -179,6 +179,7 @@ textures/vram_compression/import_etc2_astc=true
 
 Stash="*res://game/scripts/stash.gd"
 Sfx="*res://game/scripts/sfx.gd"
+Net="*res://game/scripts/net.gd"
 
 [input_devices]
 
