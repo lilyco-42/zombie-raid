@@ -2,6 +2,8 @@ extends CanvasLayer
 ## Raid HUD, built entirely in code: health bar, loot counters,
 ## center messages, extraction progress bar and a red damage flash.
 
+const I18n := preload("res://game/scripts/i18n.gd")
+
 var _health_bar: ProgressBar
 var _health_label: Label
 var _loot_label: Label
@@ -11,6 +13,8 @@ var _extract_bar: ProgressBar
 var _flash: ColorRect
 var _msg_tween: Tween
 var _clock_label: Label
+var _ammo_label: Label
+var _keys_label: Label
 
 func _ready() -> void:
 	layer = 10
@@ -106,7 +110,7 @@ func _ready() -> void:
 	_extract_box.visible = false
 	root.add_child(_extract_box)
 	var extract_label := _make_label(20)
-	extract_label.text = "EXTRACTING..."
+	extract_label.text = I18n.t("extracting")
 	extract_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_extract_box.add_child(extract_label)
 	_extract_bar = ProgressBar.new()
@@ -118,6 +122,54 @@ func _ready() -> void:
 	_extract_bar.add_theme_stylebox_override("fill", green)
 	_extract_bar.add_theme_stylebox_override("background", bg_style.duplicate())
 	_extract_box.add_child(_extract_bar)
+
+	# Bottom-right: 弹药
+	_ammo_label = _make_label(26)
+	_ammo_label.anchor_left = 1.0
+	_ammo_label.anchor_right = 1.0
+	_ammo_label.anchor_top = 1.0
+	_ammo_label.anchor_bottom = 1.0
+	_ammo_label.offset_left = -420
+	_ammo_label.offset_right = -20
+	_ammo_label.offset_top = -78
+	_ammo_label.offset_bottom = -44
+	_ammo_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_ammo_label.text = "%s  -- / --" % I18n.t("ammo")
+	root.add_child(_ammo_label)
+
+	# Bottom-right: 键位速查 (常驻)
+	_keys_label = _make_label(14)
+	_keys_label.anchor_left = 1.0
+	_keys_label.anchor_right = 1.0
+	_keys_label.anchor_top = 1.0
+	_keys_label.anchor_bottom = 1.0
+	_keys_label.offset_left = -620
+	_keys_label.offset_right = -20
+	_keys_label.offset_top = -40
+	_keys_label.offset_bottom = -8
+	_keys_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_keys_label.modulate.a = 0.72
+	_keys_label.text = _key_hints()
+	root.add_child(_keys_label)
+
+func _key_hints() -> String:
+	var pairs := [
+		[I18n.t("key_wasd"), I18n.t("hint_move")],
+		[I18n.t("key_shift"), I18n.t("hint_sprint")],
+		[I18n.t("key_ctrl"), I18n.t("hint_crouch")],
+		[I18n.t("key_space"), I18n.t("hint_jump")],
+		[I18n.t("key_lmb"), I18n.t("hint_shoot")],
+		[I18n.t("key_rmb"), I18n.t("hint_aim")],
+		[I18n.t("key_r"), I18n.t("hint_reload")],
+		[I18n.t("key_e"), I18n.t("hint_interact")],
+		[I18n.t("key_mmb"), I18n.t("hint_scan")],
+		[I18n.t("key_t"), I18n.t("hint_flashlight")],
+		[I18n.t("key_v"), I18n.t("hint_view")],
+	]
+	var out := PackedStringArray()
+	for pair in pairs:
+		out.append("%s %s" % [pair[0], pair[1]])
+	return "  |  ".join(out)
 
 func _make_label(size: int) -> Label:
 	var l := Label.new()
@@ -131,7 +183,7 @@ func set_health(current: float, maximum: float) -> void:
 		return
 	_health_bar.max_value = maximum
 	_health_bar.value = current
-	_health_label.text = "HP  %d / %d" % [int(current), int(maximum)]
+	_health_label.text = "%s  %d / %d" % [I18n.t("hp"), int(current), int(maximum)]
 
 func set_clock(text: String, urgent: bool) -> void:
 	_clock_label.text = text
@@ -140,9 +192,15 @@ func set_clock(text: String, urgent: bool) -> void:
 
 func set_status(run_loot: int, banked: int, kills: int, quota: int = -1) -> void:
 	if quota >= 0:
-		_loot_label.text = "LOOT  $%d   |   STASH $%d / QUOTA $%d   |   KILLS %d" % [run_loot, banked, quota, kills]
+		_loot_label.text = "%s $%d  |  %s $%d / %s $%d  |  %s %d" % [
+			I18n.t("loot"), run_loot, I18n.t("stash"), banked,
+			I18n.t("quota"), quota, I18n.t("kills"), kills]
 	else:
-		_loot_label.text = "LOOT  $%d    |    STASH  $%d    |    KILLS  %d" % [run_loot, banked, kills]
+		_loot_label.text = "%s $%d   |   %s $%d   |   %s %d" % [
+			I18n.t("loot"), run_loot, I18n.t("stash"), banked, I18n.t("kills"), kills]
+
+func set_ammo(current: int, reserve: int) -> void:
+	_ammo_label.text = "%s  %d / %d" % [I18n.t("ammo"), current, reserve]
 
 func show_message(text: String, duration := 2.5) -> void:
 	_msg_label.text = text

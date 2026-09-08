@@ -11,6 +11,9 @@ const SPITTER_MODEL := "res://assets/kaykit/skeletons/Skeleton_Mage.glb"
 const LootBoxScript := preload("res://game/scripts/loot_box.gd")
 const ExtractionZoneScript := preload("res://game/scripts/extraction_zone.gd")
 const HUDScript := preload("res://game/scripts/raid_hud.gd")
+const I18n := preload("res://game/scripts/i18n.gd")
+const AmmoPickupScript := preload("res://game/scripts/ammo_pickup.gd")
+const AMMO_COUNT := 8
 const PortalScript := preload("res://game/scripts/portal.gd")
 
 const WEAPON_SCENES := [
@@ -72,6 +75,7 @@ func setup(world_ref: Node3D, player_ref: Node3D, block_centers: Array, dungeon:
 	_last_health = player.current_health
 	hud.set_health(player.current_health, player.max_health)
 	hud.set_status(run_loot, Stash.banked_loot, kills, Stash.quota)
+	_connect_ammo_hud()
 
 	var loot_spots := block_centers.duplicate()
 	loot_spots.shuffle()
@@ -85,10 +89,13 @@ func setup(world_ref: Node3D, player_ref: Node3D, block_centers: Array, dungeon:
 	weapon_spots.shuffle()
 	for i in mini(WEAPON_COUNT, WEAPON_SCENES.size()):
 		_spawn_weapon_pickup(WEAPON_SCENES[i], _corner_spot(weapon_spots[i]) + Vector3(0, 0.6, 0))
+	for i in AMMO_COUNT:
+		var ammo_idx := (WEAPON_COUNT + i) % weapon_spots.size()
+		_spawn_ammo_pickup(_corner_spot(weapon_spots[ammo_idx]))
 	_spawn_extraction_zone(Vector3(18.0, 0, 18.0))  # road junction: always clear
 	if not dungeon.is_empty():
 		_setup_facility(dungeon)
-	hud.show_message("RAID START — loot the city, extract at the GREEN BEAM", 4.0)
+	hud.show_message(I18n.t("raid_start"), 4.0)
 	_run_spawner()
 
 func _setup_facility(dungeon: Dictionary) -> void:
@@ -124,7 +131,7 @@ func _setup_facility(dungeon: Dictionary) -> void:
 			spitters_placed += 1
 			if not spitter_announced:
 				spitter_announced = true
-				hud.show_message("Something spits in the dark...", 2.0)
+			hud.show_message(I18n.t("spitter_warning"), 2.0)
 		else:
 			_spawn_zombie_at(pos + Vector3(randf_range(-1.5, 1.5), 0.2, randf_range(-1.5, 1.5)))
 		zombies_placed += 1
@@ -298,6 +305,24 @@ func _on_zombie_died(at_position: Vector3) -> void:
 	if randf() < 0.3:
 		_spawn_loot_box(at_position, 30 + randi() % 50)
 
+func _connect_ammo_hud() -> void:
+	var wm := player.find_child("Weapons_Manager", true, false)
+	if wm == null or not wm.has_signal("update_ammo"):
+		return
+	wm.update_ammo.connect(func(a): hud.set_ammo(int(a[0]), int(a[1])))
+	var slot: Resource = wm.get("current_weapon_slot")
+	if slot:
+		hud.set_ammo(int(slot.get("current_ammo")), int(slot.get("reserve_ammo")))
+
+func _spawn_ammo_pickup(pos: Vector3) -> void:
+	var box: Area3D = AmmoPickupScript.new()
+	world.add_child(box)
+	box.global_position = pos
+	box.collected.connect(_on_ammo_collected)
+
+func _on_ammo_collected(amount: int, _box: Area3D) -> void:
+	hud.show_message(I18n.t("ammo_gained") % amount, 1.6)
+
 func _spawn_loot_box(pos: Vector3, value: int, tint := Color(1, 1, 1)) -> void:
 	var box := Area3D.new()
 	box.set_script(LootBoxScript)
@@ -373,7 +398,7 @@ func _on_player_died() -> void:
 	_run_loot_lost()
 	Sfx.raid_failed()
 	hud.set_extraction(false, 0.0)
-	hud.show_message("YOU DIED — carried loot lost", 4.0)
+	hud.show_message(I18n.t("died"), 4.0)
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 	await get_tree().create_timer(4.0).timeout
 	get_tree().reload_current_scene()

@@ -9,10 +9,13 @@ const TouchControlsScript := preload("res://game/scripts/touch_controls.gd")
 const ShopMenuScript := preload("res://game/scripts/shop_menu.gd")
 const GreatWallScript := preload("res://game/scripts/greatwall_perimeter.gd")
 const ChineseDistrictScript := preload("res://game/scripts/chinese_district.gd")
+const PointerLockScript := preload("res://game/scripts/pointer_lock.gd")
+const TutorialScript := preload("res://game/scripts/tutorial_overlay.gd")
 
 @onready var player: CharacterBody3D = $PlayerInstance
 @onready var manager: Node = $Manager
 var shop: CanvasLayer
+var pointer_lock: Node
 
 func _ready() -> void:
 	player.add_to_group("player")
@@ -46,6 +49,12 @@ func _ready() -> void:
 	district.set_script(ChineseDistrictScript)
 	add_child(district)
 	district.build(self)
+
+	# 鼠标锁定守卫: 先关着, 新手引导关闭后再启用
+	pointer_lock = Node.new()
+	pointer_lock.name = "PointerLock"
+	pointer_lock.set_script(PointerLockScript)
+	add_child(pointer_lock)
 
 	var dungeon_builder := Node.new()
 	dungeon_builder.name = "DungeonBuilder"
@@ -82,6 +91,18 @@ func _apply_upgrades() -> void:
 	if Stash.upgrade_level("medkit") > 0:
 		# A free medkit box lands at your feet — save it for deep in the raid
 		manager._spawn_medkit(player.global_position + Vector3(1.5, 0, 0))
+	_show_tutorial()
+
+func _show_tutorial() -> void:
+	## 新手引导: 每局开场显示一次, 关闭后才交出鼠标锁 (引导需要光标看键位表)。
+	var tutorial: CanvasLayer = TutorialScript.new()
+	tutorial.name = "Tutorial"
+	add_child(tutorial)
+	tutorial.dismissed.connect(_enable_pointer_lock)
+
+func _enable_pointer_lock() -> void:
+	if pointer_lock:
+		pointer_lock.call("set_enabled", true)
 
 func _seed_spawn_points(block_centers: Array) -> void:
 	var spots := block_centers.duplicate()
