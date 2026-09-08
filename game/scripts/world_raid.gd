@@ -11,6 +11,7 @@ const GreatWallScript := preload("res://game/scripts/greatwall_perimeter.gd")
 const ChineseDistrictScript := preload("res://game/scripts/chinese_district.gd")
 const ChineseFacilityScript := preload("res://game/scripts/chinese_facility.gd")
 const ChineseWayfindScript := preload("res://game/scripts/chinese_wayfind.gd")
+const ChineseFloorScript := preload("res://game/scripts/chinese_floor.gd")
 const PointerLockScript := preload("res://game/scripts/pointer_lock.gd")
 const TutorialScript := preload("res://game/scripts/tutorial_overlay.gd")
 
@@ -114,6 +115,13 @@ func _build_world() -> void:
 	wayfind.set_script(ChineseWayfindScript)
 	add_child(wayfind)
 	wayfind.build(self, dungeon, randi())
+
+	# 中式渐进 · 青砖铺地: 设施最深层地面/顶面的砖石补缺 (CELL=6 vs 旧砖 4m 空洞)
+	var floor_pave := Node.new()
+	floor_pave.name = "ChineseFloor"
+	floor_pave.set_script(ChineseFloorScript)
+	add_child(floor_pave)
+	floor_pave.build(self, dungeon)
 
 	_seed_spawn_points(info["block_centers"])
 	_setup_navigation()
