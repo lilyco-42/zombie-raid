@@ -225,3 +225,73 @@ server/
 - godot-rust gdext：v0.5 发布说明（2026-03）与 compatibility 文档（Godot 4.1+ 运行时规则）
 - lightyear/bevy_replicon 对比（Bevy 生态定位，排除依据）
 - v1 版调研（Go 选型过程与框架评估）见 git 历史：docs/SERVER_DEV.md @ e3fa560
+
+## 11. 内容运营与商业化（README_OPS.md T1-T8 落地）
+
+> 服务端按「内容运营型」演进：新物品/新角色/联动素材上线不改 Rust 代码。
+> 分工界碑、任务看板与 10 年不变量见 `server/README_OPS.md`（本文不重复）。
+
+### 11.1 按变更节奏四分法
+
+| 层 | 变更频率 | 载体 | 上线方式 |
+|---|---|---|---|
+| 客户端资产 | 小时级 | 场景/模型/音效（UI AI 负责） | 客户端更新，服务端只认 ID |
+| 内容表 | 小时~天级 | `server/content/*.toml` | 热载 reload（§11.4），不停机 |
+| 效果原语 | 季度级 | `world.rs` 模拟内核（Rust） | 停机部署，黄金测试护城 |
+| 线协议 | 冻结 | `protocol` crate bincode 布局 | 只增变体不改旧帧（黄金字节钉死） |
+
+### 11.2 内容表（T1-T4）
+
+- `zombies.toml`（变体：walk/run/hp/damage/权重）、`items.toml`（kind 白名单
+  currency/consumable/material/…，商店字段 price/purchasable/deprecated）、
+  `raid.toml`（刷怪曲线/时钟/命中规则/掉落率）。
+- `protocol::content` 启动时加载并 **fail-closed 校验**（ID 唯一、数值区间、
+  引用存在）；`built_in()` 用 include_str! 编译期嵌入，磁盘表与内嵌表有
+  单元测试对拍（content_store::load_from_dir_reads_the_real_tables）。
+- 世界规则数据驱动化：同 seed 对拍基线（16 个旧测试零改动全绿）证明
+  行为与硬编码时代一致。
+
+### 11.3 商店账本与持久化（T5-T6）
+
+- 协议：C2S `BuyItem{pid,item_id}` / `RequestShop`；S2C `ShopList` /
+  `InventoryUpdate{pid,item_id,count:i64}` / `TradeError{pid,reason}`。
+  失败全部显式：`raid is over / unknown item / not for sale / insufficient coins`。
+- 会话内权威账本 `inventory[pid][item]`；击杀掉落记 last hitter；
+  每次 mutate **写穿** `PlayerRepo`（trait 隔离，10 年可换 PostgreSQL）。
+- `SqlitePlayerRepo`（rusqlite bundled）：自写编号迁移器，`schema_migrations`
+  表第一天就有；迁移 SQL **只增不改**（不变量 3）。purchases 流水是审计
+  根基（退款/复现/取证）。跨会话库存恢复等账号系统落地后启用（读 API 已就位，
+  v1 pid 是客户端自报、无稳定身份）。
+
+### 11.4 热载 SOP（T7）——不停机换表
+
+1. 编辑 `server/content/*.toml`（服务器工作目录的 content/ 或传显式目录）。
+2. 本地校验：`cargo test -p protocol`（含磁盘表 == 内嵌表对拍）。
+3. 连管理端口（仅回环 127.0.0.1:24566，**无鉴权，永不外露**）发一行：
+   `reload server/content` → 回 `ok zombies=N items=M`；校验失败回
+   `err ...` 且旧快照继续服务（fail-closed）。
+4. 观察：`status` 确认条目数；World 在下一个 20TPS tick 采用新快照，
+   新刷怪/新掉落立即按新表结算（进行中的实体属性不回写）。
+5. 表文件落 git（内容清单 = Git 仓库，玩家数据 = SQLite，双轨见 README_OPS）。
+
+### 11.5 联动素材 SOP——新增一个联动物品/僵尸
+
+**新增物品**（例：联动 X 的「符咒」，限量消耗品）：
+1. `items.toml` 追加条目：新 `id`（**永不复用旧 ID**，下架 = `deprecated = true`）。
+2. 可售则填 `shop = { price = N, purchasable = true }`；限时活动结束后置
+   `purchasable = false`（表里保留行，流水与库存不受影响）。
+3. §11.4 流程热载；商店 UI（UI AI 负责）下次 `RequestShop` 自动带出新品。
+4. 客户端资产（图标/模型/音效）由 UI AI 侧发布，服务端只认 ID 字符串。
+
+**新增僵尸变体**（例：联动 X 的「跳跳之王」）：
+1. `zombies.toml` 追加变体：新 `id`（u8 键位，同样永不复用）、walk/run/hp/
+   damage、刷怪权重。
+2. 校验器约束：`walk <= run`、至少一个变体权重 > 0；权重决定 spawn roll
+   分布（保序，详见 content.rs 注释）。
+3. 热载生效后新刷怪按新变体出（ztype 快照在途实体由 fallback 规则兜底）。
+4. 外观与动作是客户端资产；服务端只有数值与 ID。
+
+**CI 守则**（不变量 4）：任何内容表变更跑同 seed 对拍——确定性是商业化
+公平（掉落/刷新可复核）的根基；`built_in_matches_pre_content_constants`
+钉死基线，改基线 = 明确的产品决策并记录在 commit message。
+
