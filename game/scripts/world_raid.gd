@@ -8,6 +8,7 @@ const DungeonBuilderScript := preload("res://game/scripts/dungeon_builder.gd")
 const TouchControlsScript := preload("res://game/scripts/touch_controls.gd")
 const ShopMenuScript := preload("res://game/scripts/shop_menu.gd")
 const GreatWallScript := preload("res://game/scripts/greatwall_perimeter.gd")
+const ChineseDistrictScript := preload("res://game/scripts/chinese_district.gd")
 
 @onready var player: CharacterBody3D = $PlayerInstance
 @onready var manager: Node = $Manager
@@ -38,6 +39,13 @@ func _ready() -> void:
 	greatwall.set_script(GreatWallScript)
 	add_child(greatwall)
 	greatwall.build(self)
+
+	# 中式渐进 · 城内篇: 越靠近城心, 中式密度与体量越高
+	var district := Node.new()
+	district.name = "ChineseDistrict"
+	district.set_script(ChineseDistrictScript)
+	add_child(district)
+	district.build(self)
 
 	var dungeon_builder := Node.new()
 	dungeon_builder.name = "DungeonBuilder"

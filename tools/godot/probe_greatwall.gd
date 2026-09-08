@@ -11,14 +11,23 @@ func _ready() -> void:
 	add_child(gw)
 	gw.build(self)
 
-	var pieces := 0
-	var tally := {}
+	var district_script = load("res://game/scripts/chinese_district.gd")
+	var district := Node.new()
+	district.name = "ChineseDistrictProbe"
+	district.set_script(district_script)
+	add_child(district)
+	district.build(self)
+
+	var gw_count := 0
+	var zh_count := 0
 	for c in get_children():
-		if String(c.name).begins_with("GW_"):
-			pieces += 1
-			tally[String(c.name)] = int(tally.get(String(c.name), 0)) + 1
-	print("GW_PROBE pieces=", pieces)
-	for k in tally.keys():
-		print("  ", k, " x", tally[k])
-	print("GW_PROBE " + ("PASS" if pieces == 41 else "CHECK"))
+		var n := String(c.name)
+		if n.begins_with("GW_"):
+			gw_count += 1
+		elif n.begins_with("ZH_"):
+			zh_count += 1
+	print("GW_PROBE pieces=", gw_count)
+	print("ZH_PROBE pieces=", zh_count)
+	var ok := (gw_count == 41 and zh_count == 16)
+	print("ZH_PROBE " + ("PASS" if ok else "CHECK"))
 	get_tree().quit()
