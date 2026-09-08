@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="docs/banner.svg" width="720" alt="banner">
+</div>
+
 # Zombie Raid 🧟 — PVE 搜打撤（Lethal Company 式）
 
 > 夜幕城市搜刮物资 → 潜入地下设施抢金箱 → 冲回绿色光柱撤离 → 配额翻倍，越滚越深。
