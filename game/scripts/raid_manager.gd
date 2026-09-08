@@ -46,6 +46,8 @@ const VARIANTS := [
 ]
 
 var run_loot := 0
+var loot_bonus := 1.0    # shop upgrade: multiplier on collected loot value
+var speed_bonus := 0.0   # shop upgrade: offsets the loot weight penalty
 var kills := 0
 var alive := 0
 var elapsed := 0.0
@@ -169,7 +171,7 @@ func _process(delta: float) -> void:
 	elapsed += delta
 	_scan_cd = maxf(_scan_cd - delta, 0.0)
 	# Loot weight: carrying more slows you down (Lethal Company style)
-	player.weight_factor = clampf(1.0 - float(run_loot) / 2400.0 * 0.35, 0.65, 1.0)
+	player.weight_factor = clampf((1.0 + speed_bonus) - float(run_loot) / 2400.0 * 0.35, 0.65, 1.4)
 	# Moon countdown
 	var remaining := RUN_LIMIT - elapsed
 	if remaining > 0.0:
@@ -318,7 +320,7 @@ func _on_loot_collected(value: int, box: Area3D) -> void:
 	if box.get("kind") == "medkit":
 		hud.show_message("+ %d HP" % int(box.get("heal_amount")), 1.0)
 	else:
-		run_loot += value
+		run_loot += int(round(value * loot_bonus))
 		hud.show_message("+ $%d" % value, 1.0)
 	hud.set_status(run_loot, Stash.banked_loot, kills, Stash.quota)
 

@@ -6,9 +6,11 @@ const CityBuilderScript := preload("res://game/scripts/city_builder.gd")
 const AvatarScript := preload("res://game/scripts/player_avatar.gd")
 const DungeonBuilderScript := preload("res://game/scripts/dungeon_builder.gd")
 const TouchControlsScript := preload("res://game/scripts/touch_controls.gd")
+const ShopMenuScript := preload("res://game/scripts/shop_menu.gd")
 
 @onready var player: CharacterBody3D = $PlayerInstance
 @onready var manager: Node = $Manager
+var shop: CanvasLayer
 
 func _ready() -> void:
 	player.add_to_group("player")
@@ -38,6 +40,32 @@ func _ready() -> void:
 	_seed_spawn_points(info["block_centers"])
 	_setup_navigation()
 	manager.setup(self, player, info["block_centers"], dungeon)
+	_open_shop()
+
+func _open_shop() -> void:
+	## Between-raid shop: world is built and paused behind it; DEPLOY resumes.
+	shop = CanvasLayer.new()
+	shop.name = "ShopMenu"
+	shop.set_script(ShopMenuScript)
+	add_child(shop)
+	shop.deployed.connect(_apply_upgrades)
+	shop.open()
+
+func _apply_upgrades() -> void:
+	## Permanent upgrades bought in the shop, applied to this raid's player.
+	var hp_lvl: int = Stash.upgrade_level("health")
+	var speed_lvl: int = Stash.upgrade_level("speed")
+	var loot_lvl: int = Stash.upgrade_level("loot")
+	if hp_lvl > 0:
+		player.max_health = 100.0 + 25.0 * hp_lvl
+		player.current_health = player.max_health
+	if speed_lvl > 0:
+		manager.speed_bonus = 0.06 * speed_lvl
+	if loot_lvl > 0:
+		manager.loot_bonus = 1.0 + 0.12 * loot_lvl
+	if Stash.upgrade_level("medkit") > 0:
+		# A free medkit box lands at your feet — save it for deep in the raid
+		manager._spawn_medkit(player.global_position + Vector3(1.5, 0, 0))
 
 func _seed_spawn_points(block_centers: Array) -> void:
 	var spots := block_centers.duplicate()

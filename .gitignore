@@ -10,3 +10,6 @@ Thumbs.db
 Desktop.ini
 *.tmp
 mono_crash.*.json
+
+# WorkBuddy agent state
+.agents/
