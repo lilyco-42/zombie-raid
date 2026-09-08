@@ -10,6 +10,7 @@ const ShopMenuScript := preload("res://game/scripts/shop_menu.gd")
 const GreatWallScript := preload("res://game/scripts/greatwall_perimeter.gd")
 const ChineseDistrictScript := preload("res://game/scripts/chinese_district.gd")
 const ChineseFacilityScript := preload("res://game/scripts/chinese_facility.gd")
+const ChineseWayfindScript := preload("res://game/scripts/chinese_wayfind.gd")
 const PointerLockScript := preload("res://game/scripts/pointer_lock.gd")
 const TutorialScript := preload("res://game/scripts/tutorial_overlay.gd")
 
@@ -106,6 +107,13 @@ func _build_world() -> void:
 	facility.set_script(ChineseFacilityScript)
 	add_child(facility)
 	facility.build(self, dungeon, randi())
+
+	# 中式渐进 · 引路灯: 入口->出口最短路径挂红灯笼 (零建模的导航路标)
+	var wayfind := Node.new()
+	wayfind.name = "ChineseWayfind"
+	wayfind.set_script(ChineseWayfindScript)
+	add_child(wayfind)
+	wayfind.build(self, dungeon, randi())
 
 	_seed_spawn_points(info["block_centers"])
 	_setup_navigation()
