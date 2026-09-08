@@ -91,6 +91,9 @@ pub struct World {
     /// Content tables (zombie kinds / items / raid rules). Boots on the
     /// built-in set; hot-reload swaps the Arc (see README_OPS.md T7).
     pub content: std::sync::Arc<ContentTables>,
+    /// Server-authoritative session ledger: pid -> item_id -> count.
+    /// Drop credits and purchases land here; T6 persists via PlayerRepo.
+    inventory: HashMap<u32, HashMap<String, i64>>,
 }
 
 impl World {
@@ -115,6 +118,7 @@ impl World {
             spawn_acc: 0.0,
             netstate_acc: 0.0,
             content,
+            inventory: HashMap::new(),
         }
     }
 
@@ -179,6 +183,74 @@ impl World {
     /// Disconnect cleanup: the connection task infers this peer's pid from
     /// its first reported state/hit and hands it over on close. Drops the
     /// position (zombies stop chasing the ghost) and the hit-rate clock.
+    /// The ledger's currency: the first non-deprecated `currency` item.
+    fn coin_id(&self) -> &str {
+        self.content
+            .items
+            .iter()
+            .find(|i| i.kind == "currency" && !i.deprecated)
+            .map(|i| i.id.as_str())
+            .unwrap_or("coin")
+    }
+
+    fn balance(&self, pid: u32, item_id: &str) -> i64 {
+        self.inventory
+            .get(&pid)
+            .and_then(|bag| bag.get(item_id))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn add_item(&mut self, pid: u32, item_id: &str, delta: i64) {
+        let bag = self.inventory.entry(pid).or_default();
+        *bag.entry(item_id.to_string()).or_insert(0) += delta;
+        if bag.get(item_id).copied().unwrap_or(0) <= 0 {
+            bag.remove(item_id);
+        }
+    }
+
+    /// C2S::BuyItem - server-authoritative purchase (README_OPS.md T5).
+    /// Every failure mode answers TradeError so the shop UI can react.
+    fn buy_item(&mut self, pid: u32, item_id: &str) -> Vec<S2C> {
+        if !self.raid_active {
+            return vec![S2C::TradeError { pid, reason: "raid is over".into() }];
+        }
+        let Some(def) = self.content.item(item_id) else {
+            return vec![S2C::TradeError {
+                pid,
+                reason: format!("unknown item '{item_id}'"),
+            }];
+        };
+        if !def.shop.purchasable {
+            return vec![S2C::TradeError { pid, reason: "not for sale".into() }];
+        }
+        let coin = self.coin_id().to_string();
+        let price = def.shop.price as i64;
+        if self.balance(pid, &coin) < price {
+            return vec![S2C::TradeError { pid, reason: "insufficient coins".into() }];
+        }
+        self.add_item(pid, &coin, -price);
+        self.add_item(pid, item_id, 1);
+        let coin_bal = self.balance(pid, &coin);
+        let bought = self.balance(pid, item_id);
+        vec![
+            S2C::InventoryUpdate { pid, item_id: coin, count: coin_bal },
+            S2C::InventoryUpdate { pid, item_id: item_id.to_string(), count: bought },
+        ]
+    }
+
+    /// C2S::RequestShop - purchasable, non-deprecated items only.
+    fn shop_list(&mut self) -> Vec<S2C> {
+        let entries: Vec<(String, u32)> = self
+            .content
+            .items
+            .iter()
+            .filter(|i| i.shop.purchasable && !i.deprecated)
+            .map(|i| (i.id.clone(), i.shop.price))
+            .collect();
+        vec![S2C::ShopList { entries }]
+    }
+
     pub fn retire_player(&mut self, pid: u32) {
         self.players.remove(&pid);
         self.hit_times.remove(&pid);
@@ -223,6 +295,12 @@ impl World {
         } else {
             0
         };
+        if drop_value > 0 {
+            // server-side coin ledger: the last hitter gets the drop (v1
+            // simplification; the client stash stays display-only until T6)
+            let coin = self.coin_id().to_string();
+            self.add_item(pid, &coin, drop_value as i64);
+        }
         vec![S2C::ZombieDead {
             net_id: z.id,
             pos: z.pos,
@@ -254,6 +332,8 @@ impl World {
         use protocol::C2S;
         match msg {
             C2S::Hello { .. } => self.handle_hello(),
+            C2S::BuyItem { pid, item_id } => self.buy_item(*pid, item_id),
+            C2S::RequestShop => self.shop_list(),
             C2S::PlayerState { pid, pos, .. } => {
                 self.player_state(*pid, *pos);
                 vec![]
@@ -828,5 +908,107 @@ mod tests {
             other => panic!("{other:?}"),
         };
         assert_ne!(seed2, seed3, "each raid gets its own seed");
+    }
+}
+
+
+#[cfg(test)]
+mod shop_tests {
+    //! T5: server-authoritative shop loop (README_OPS.md).
+
+    use super::*;
+    use protocol::C2S;
+
+    fn w_with_coins(coins: i64) -> World {
+        let mut w = World::new(42);
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        if coins > 0 {
+            let c = w.coin_id().to_string();
+            w.add_item(2, &c, coins);
+        }
+        w
+    }
+
+    #[test]
+    fn kill_credits_coins_to_last_hitter() {
+        let mut w = World::new(42);
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        let id = w.force_spawn(1, [5.0, 0.0, 0.0]);
+        let coin = w.coin_id().to_string();
+        let msgs = w.validate_hit(2, id, 80.0); // kills the 60hp walker
+        let drop = match &msgs[..] {
+            [S2C::ZombieDead { drop_value, .. }] => *drop_value as i64,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(w.balance(2, &coin), drop, "ledger mirrors the drop roll");
+    }
+
+    #[test]
+    fn happy_purchase_deducts_and_credits() {
+        let mut w = w_with_coins(1000);
+        let out = w.handle(&C2S::BuyItem { pid: 2, item_id: "bandage".into() });
+        let coin = w.coin_id().to_string();
+        match &out[..] {
+            [S2C::InventoryUpdate { pid: p1, item_id: c, count: cc },
+             S2C::InventoryUpdate { pid: p2, item_id: b, count: bc }] => {
+                assert_eq!((*p1, *p2), (2, 2), "both updates target the buyer");
+                assert_eq!(c, &coin, "first update is the coin deduction");
+                assert_eq!(*cc, 1000 - 120);
+                assert_eq!(b, "bandage");
+                assert_eq!(*bc, 1);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(w.balance(2, &coin), 880);
+        assert_eq!(w.balance(2, "bandage"), 1);
+    }
+
+    #[test]
+    fn insufficient_coins_rejected() {
+        let mut w = w_with_coins(0);
+        let out = w.handle(&C2S::BuyItem { pid: 2, item_id: "bandage".into() });
+        assert!(
+            matches!(&out[..], [S2C::TradeError { reason, .. }] if reason == "insufficient coins"),
+            "{out:?}"
+        );
+        assert_eq!(w.balance(2, "bandage"), 0, "rejected trade mutates nothing");
+    }
+
+    #[test]
+    fn unknown_item_rejected() {
+        let mut w = w_with_coins(500);
+        let out = w.handle(&C2S::BuyItem { pid: 2, item_id: "ghost".into() });
+        assert!(matches!(&out[..], [S2C::TradeError { reason, .. }] if reason.contains("unknown item")));
+    }
+
+    #[test]
+    fn not_for_sale_rejected() {
+        let mut w = w_with_coins(500);
+        let out = w.handle(&C2S::BuyItem { pid: 2, item_id: "scrap_metal".into() });
+        assert!(matches!(&out[..], [S2C::TradeError { reason, .. }] if reason == "not for sale"));
+    }
+
+    #[test]
+    fn shop_lists_purchasable_only() {
+        let mut w = World::new(42);
+        let out = w.handle(&C2S::RequestShop);
+        match &out[..] {
+            [S2C::ShopList { entries }] => {
+                assert_eq!(
+                    entries,
+                    &vec![("bandage".to_string(), 120u32), ("ammo_box".to_string(), 250u32)],
+                    "coin/scrap_metal are not purchasable"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn trade_after_raid_over_rejected() {
+        let mut w = w_with_coins(1000);
+        w.handle(&C2S::ReportPlayerDied);
+        let out = w.handle(&C2S::BuyItem { pid: 2, item_id: "bandage".into() });
+        assert!(matches!(&out[..], [S2C::TradeError { reason, .. }] if reason == "raid is over"));
     }
 }

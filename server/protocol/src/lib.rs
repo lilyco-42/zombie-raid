@@ -41,6 +41,13 @@ pub enum C2S {
     ReportExtract { in_zone: bool },
     /// was `rpc_report_player_died` (any death fails the raid for the team)
     ReportPlayerDied,
+    // ---- shop / inventory (README_OPS.md T5; server-authoritative ledger) --
+    /// Shop: buy one unit of `item_id` at its content-table price. The
+    /// server keeps the session coin ledger (drop credits + purchases);
+    /// clients only display what InventoryUpdate broadcasts.
+    BuyItem { pid: u32, item_id: String },
+    /// Ask for the shop listing -> S2C::ShopList.
+    RequestShop,
 }
 
 /// Server -> client messages.
@@ -70,6 +77,15 @@ pub enum S2C {
     /// was `rpc_damage_player` — `pid` names the target so a broadcast
     /// channel stays safe (client ignores reports for other pids)
     DamagePlayer { pid: u32, dmg: f32 },
+    // ---- shop / inventory (README_OPS.md T5) -------------------------------
+    /// Shop listing (purchasable, non-deprecated items only):
+    /// Vec<(item_id, price)>. Low frequency (on RequestShop / content swap).
+    ShopList { entries: Vec<(String, u32)> },
+    /// Server-authoritative inventory snapshot for one (pid, item) pair;
+    /// the client replaces its local count for that id.
+    InventoryUpdate { pid: u32, item_id: String, count: i64 },
+    /// Purchase rejected — `reason` is operator-readable, shop UI shows it.
+    TradeError { pid: u32, reason: String },
 }
 
 /// One zombie in the 15Hz snapshot.
@@ -315,5 +331,80 @@ mod tests {
     fn golden_raid_failed_bytes() {
         // Unit variant: discriminant only, no payload — 4 bytes.
         assert_eq!(encode_s2c(&S2C::RaidFailed), vec![0x07, 0, 0, 0]);
+    }
+}
+
+
+#[cfg(test)]
+mod shop_golden_tests {
+    //! T5 golden bytes (README_OPS.md): bincode legacy - u32 LE
+    //! discriminants, u64 LE string lengths, UTF-8 bodies. Reference values
+    //! computed with python struct.pack; mirrored by game/scripts/net_codec.gd
+    //! tests F8-F12. Variants 6/7 (C2S) and 9/10/11 (S2C) are APPEND-ONLY.
+
+    use super::*;
+
+    #[test]
+    fn golden_buy_item_bytes() {
+        let msg = C2S::BuyItem { pid: 357, item_id: "bandage".into() };
+        let bytes = bincode::serialize(&msg).unwrap();
+        assert_eq!(
+            bytes,
+            vec![0x06, 0, 0, 0, 0x65, 0x01, 0, 0,
+                 0x07, 0, 0, 0, 0, 0, 0, 0,
+                 0x62, 0x61, 0x6e, 0x64, 0x61, 0x67, 0x65],
+            "buy pid=357 'bandage' = 23 bytes"
+        );
+        assert_eq!(bincode::deserialize::<C2S>(&bytes).unwrap(), msg);
+    }
+
+    #[test]
+    fn golden_request_shop_bytes() {
+        assert_eq!(bincode::serialize(&C2S::RequestShop).unwrap(), vec![0x07, 0, 0, 0]);
+    }
+
+    #[test]
+    fn golden_shop_list_bytes() {
+        let msg = S2C::ShopList { entries: vec![("bandage".into(), 120u32)] };
+        let bytes = bincode::serialize(&msg).unwrap();
+        assert_eq!(
+            bytes,
+            vec![0x09, 0, 0, 0,
+                 0x01, 0, 0, 0, 0, 0, 0, 0,
+                 0x07, 0, 0, 0, 0, 0, 0, 0,
+                 0x62, 0x61, 0x6e, 0x64, 0x61, 0x67, 0x65,
+                 0x78, 0, 0, 0],
+            "one entry ('bandage',120) = 31 bytes"
+        );
+    }
+
+    #[test]
+    fn golden_inventory_update_bytes() {
+        let msg = S2C::InventoryUpdate { pid: 357, item_id: "coin".into(), count: 1250 };
+        let bytes = bincode::serialize(&msg).unwrap();
+        assert_eq!(
+            bytes,
+            vec![0x0a, 0, 0, 0, 0x65, 0x01, 0, 0,
+                 0x04, 0, 0, 0, 0, 0, 0, 0,
+                 0x63, 0x6f, 0x69, 0x6e,
+                 0xe2, 0x04, 0, 0, 0, 0, 0, 0],
+            "coin balance 1250 = 28 bytes"
+        );
+        assert_eq!(bincode::deserialize::<S2C>(&bytes).unwrap(), msg);
+    }
+
+    #[test]
+    fn golden_trade_error_bytes() {
+        let msg = S2C::TradeError { pid: 357, reason: "insufficient coins".into() };
+        let bytes = bincode::serialize(&msg).unwrap();
+        assert_eq!(
+            bytes,
+            vec![0x0b, 0, 0, 0, 0x65, 0x01, 0, 0,
+                 0x12, 0, 0, 0, 0, 0, 0, 0,
+                 0x69, 0x6e, 0x73, 0x75, 0x66, 0x66, 0x69, 0x63, 0x69, 0x65,
+                 0x6e, 0x74, 0x20, 0x63, 0x6f, 0x69, 0x6e, 0x73],
+            "34 bytes"
+        );
+        assert_eq!(bincode::deserialize::<S2C>(&bytes).unwrap(), msg);
     }
 }

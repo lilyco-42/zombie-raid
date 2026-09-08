@@ -339,5 +339,81 @@ func _run() -> void:
 	_check("F7 send_hit_zombie emits golden bytes", t3.sent_bytes.size() == 2
 		and t3.sent_bytes[1] == golden_hit)
 
+	# F8-F12: shop/inventory protocol — same golden bytes as the Rust
+	# shop_golden_tests (python struct.pack pinned on both sides)
+	# F8: encode RequestShop -> 4 bytes (variant 7 only)
+	_check("F8 encode golden RequestShop",
+		NetCodec.encode_c2s({"RequestShop": null}) == PackedByteArray([0x07, 0, 0, 0]))
+
+	# F9: encode BuyItem pid=357 "bandage" -> 23 bytes
+	var golden_buy := PackedByteArray([0x06, 0, 0, 0, 0x65, 0x01, 0, 0,
+		0x07, 0, 0, 0, 0, 0, 0, 0,
+		0x62, 0x61, 0x6e, 0x64, 0x61, 0x67, 0x65])
+	_check("F9 encode golden BuyItem",
+		NetCodec.encode_c2s({"BuyItem": {"pid": 357, "item_id": "bandage"}}) == golden_buy)
+
+	# F10: decode golden TradeError pid=357 "insufficient coins" (34 bytes)
+	var golden_err := PackedByteArray([0x0b, 0, 0, 0, 0x65, 0x01, 0, 0,
+		0x12, 0, 0, 0, 0, 0, 0, 0,
+		0x69, 0x6e, 0x73, 0x75, 0x66, 0x66, 0x69, 0x63, 0x69, 0x65,
+		0x6e, 0x74, 0x20, 0x63, 0x6f, 0x69, 0x6e, 0x73])
+	var dec_err: Dictionary = NetCodec.decode_s2c(golden_err)
+	_check("F10 decode golden TradeError", dec_err.size() == 1
+		and dec_err.has("TradeError")
+		and int(dec_err["TradeError"]["pid"]) == 357
+		and dec_err["TradeError"]["reason"] == "insufficient coins")
+
+	# F11: decode golden InventoryUpdate pid=357 "coin" 1250 (28 bytes)
+	var golden_inv := PackedByteArray([0x0a, 0, 0, 0, 0x65, 0x01, 0, 0,
+		0x04, 0, 0, 0, 0, 0, 0, 0,
+		0x63, 0x6f, 0x69, 0x6e,
+		0xe2, 0x04, 0, 0, 0, 0, 0, 0])
+	var dec_inv: Dictionary = NetCodec.decode_s2c(golden_inv)
+	_check("F11 decode golden InventoryUpdate", dec_inv.size() == 1
+		and dec_inv.has("InventoryUpdate")
+		and int(dec_inv["InventoryUpdate"]["pid"]) == 357
+		and dec_inv["InventoryUpdate"]["item_id"] == "coin"
+		and int(dec_inv["InventoryUpdate"]["count"]) == 1250)
+
+	# F12: decode golden ShopList [("bandage",120)] (31 bytes; entries are
+	# [id, price] arrays mirroring the JSON tuple shape)
+	var golden_shop := PackedByteArray([0x09, 0, 0, 0,
+		0x01, 0, 0, 0, 0, 0, 0, 0,
+		0x07, 0, 0, 0, 0, 0, 0, 0,
+		0x62, 0x61, 0x6e, 0x64, 0x61, 0x67, 0x65,
+		0x78, 0, 0, 0])
+	var dec_shop: Dictionary = NetCodec.decode_s2c(golden_shop)
+	_check("F12 decode golden ShopList", dec_shop.size() == 1
+		and dec_shop.has("ShopList")
+		and dec_shop["ShopList"]["entries"] == [["bandage", 120]])
+
+	# F13: shop wrappers route through the binary pump like the raid sends
+	# (pid must match the golden BuyItem frame)
+	var t4 = _make_script(TRANSPORTSTUB_SRC).new()
+	net._transport = t4
+	net._ws_mode = true
+	net._ws_binary = true
+	net._ws_pid = 357
+	net.send_request_shop()
+	net.send_buy_item("bandage")
+	_check("F13 shop sends emit codec bytes", t4.sent_bytes.size() == 2
+		and t4.sent_bytes[0] == PackedByteArray([0x07, 0, 0, 0])
+		and t4.sent_bytes[1] == golden_buy)
+
+	# F14: dispatch of the three shop S2Cs through the real net.gd signals
+	var shop_entries: Array = []
+	var inv_seen: Array = []
+	var err_seen: Array = []
+	net.shop_received.connect(func(entries): shop_entries.append(entries))
+	net.inventory_update.connect(func(pid, item_id, count): inv_seen.append([pid, item_id, count]))
+	net.trade_error.connect(func(reason): err_seen.append(reason))
+	net._dispatch_s2c("ShopList", {"entries": [["bandage", 120], ["ammo_box", 250]]})
+	net._dispatch_s2c("InventoryUpdate", {"pid": 7, "item_id": "coin", "count": 1250})
+	net._dispatch_s2c("TradeError", {"pid": 7, "reason": "insufficient coins"})
+	_check("F14 shop dispatches fire signals", shop_entries.size() == 1
+		and shop_entries[0] == [["bandage", 120], ["ammo_box", 250]]
+		and inv_seen == [[7, "coin", 1250]]
+		and err_seen == ["insufficient coins"])
+
 	print("ws codec test done: %s" % ("ALL PASS" if fails == 0 else "%d FAILED" % fails))
 	quit(1 if fails > 0 else 0)

@@ -21,6 +21,11 @@ signal extract_success_net
 signal lobby_changed
 signal join_failed(reason: String)
 signal seed_received
+# T5 commercialization: the server-authoritative shop/inventory channel.
+# entries arrive as [[item_id, price], ...] - ready for the shop UI grid.
+signal shop_received(entries: Array)
+signal inventory_update(pid: int, item_id: String, count: int)
+signal trade_error(reason: String)
 
 const PORT := 24565
 const MAX_PEERS := 3            # + host = 4 players
@@ -337,6 +342,12 @@ func _dispatch_s2c(variant: String, d: Variant) -> void:
 			# broadcast channel: a zombie hit YOUR body — ignore other pids
 			if int(d["pid"]) == _ws_pid:
 				rpc_damage_player(float(d["dmg"]))
+		"ShopList":
+			shop_received.emit(d["entries"])
+		"InventoryUpdate":
+			inventory_update.emit(int(d["pid"]), String(d["item_id"]), int(d["count"]))
+		"TradeError":
+			trade_error.emit(String(d["reason"]))
 		_:
 			print("[net] unknown S2C variant: %s" % variant)
 
@@ -391,6 +402,21 @@ func send_player_died() -> void:
 		_ws_send({"ReportPlayerDied": null})
 	else:
 		rpc("rpc_report_player_died")
+
+# ---- T5 shop: server-authoritative commerce (WS-mode only; the ENet
+# host has no Rust ledger behind it, so those calls are no-ops there) ------
+
+func send_buy_item(item_id: String) -> void:
+	if not online:
+		return
+	if _ws_mode:
+		_ws_send({"BuyItem": {"pid": _ws_pid, "item_id": item_id}})
+
+func send_request_shop() -> void:
+	if not online:
+		return
+	if _ws_mode:
+		_ws_send({"RequestShop": null})
 
 # ------------------------------------------------------------- avatars ----
 

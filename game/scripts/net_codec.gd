@@ -17,6 +17,8 @@ const C2S_HIT_ZOMBIE := 2
 const C2S_BOX_TAKEN := 3
 const C2S_REPORT_EXTRACT := 4
 const C2S_REPORT_PLAYER_DIED := 5
+const C2S_BUY_ITEM := 6
+const C2S_REQUEST_SHOP := 7
 
 # S2C variant indices = declaration order in protocol::S2C
 const S2C_SEED := 0
@@ -28,6 +30,9 @@ const S2C_REMOVE_BOX := 5
 const S2C_EXTRACT_SUCCESS := 6
 const S2C_RAID_FAILED := 7
 const S2C_DAMAGE_PLAYER := 8
+const S2C_SHOP_LIST := 9
+const S2C_INVENTORY_UPDATE := 10
+const S2C_TRADE_ERROR := 11
 
 # ZombieEnt wire size: u32 id + 3×f32 pos + f32 yaw + u8 anim + u8 ztype
 const ENT_SIZE := 22
@@ -61,6 +66,10 @@ static func encode_c2s(msg: Dictionary) -> PackedByteArray:
 				var b := _buf()
 				b.put_u32(C2S_REPORT_PLAYER_DIED)
 				return b.data_array
+			"BuyItem":
+				return _enc_buy_item(msg[variant])
+			"RequestShop":
+				return _enc_request_shop()
 	push_error("[netcodec] unknown C2S variant in %s" % [msg])
 	return PackedByteArray()
 
@@ -109,6 +118,28 @@ static func _enc_report_extract(d: Dictionary) -> PackedByteArray:
 	return b.data_array
 
 
+static func _enc_buy_item(d: Dictionary) -> PackedByteArray:
+	var b := _buf()
+	b.put_u32(C2S_BUY_ITEM)
+	b.put_u32(int(d["pid"]))
+	_put_str(b, String(d["item_id"]))
+	return b.data_array
+
+
+static func _enc_request_shop() -> PackedByteArray:
+	var b := _buf()
+	b.put_u32(C2S_REQUEST_SHOP)
+	return b.data_array
+
+
+## bincode legacy strings: u64 little-endian length + raw UTF-8 bytes
+## (StreamPeer's own put_utf8_string uses a u16 prefix - do NOT use it).
+static func _put_str(b: StreamPeerBuffer, s: String) -> void:
+	var bytes := s.to_utf8_buffer()
+	b.put_u64(bytes.size())
+	b.put_data(bytes)
+
+
 # ============================================================== decode ===
 
 static func _rbuf(bytes: PackedByteArray) -> StreamPeerBuffer:
@@ -143,6 +174,12 @@ static func decode_s2c(bytes: PackedByteArray) -> Dictionary:
 			return {"RaidFailed": null}
 		S2C_DAMAGE_PLAYER:
 			return _dec_damage_player(b)
+		S2C_SHOP_LIST:
+			return _dec_shop_list(b)
+		S2C_INVENTORY_UPDATE:
+			return _dec_inventory_update(b)
+		S2C_TRADE_ERROR:
+			return _dec_trade_error(b)
 	return {}
 
 
@@ -212,3 +249,51 @@ static func _dec_damage_player(b: StreamPeerBuffer) -> Dictionary:
 	var pid := int(b.get_u32())
 	var dmg := b.get_float()
 	return {"DamagePlayer": {"pid": pid, "dmg": dmg}}
+
+
+## bincode legacy string reader - see _put_str; "" means a corrupted frame.
+static func _get_str(b: StreamPeerBuffer) -> String:
+	var n := int(b.get_u64())
+	if n > 4096:  # corrupted length guard
+		return ""
+	return b.get_data(n)[1].get_string_from_utf8()
+
+
+static func _dec_shop_list(b: StreamPeerBuffer) -> Dictionary:
+	if b.get_available_bytes() < 8:
+		return {}
+	var n := int(b.get_u64())
+	if n > 4096:
+		return {}
+	var entries: Array = []
+	for i in n:
+		if b.get_available_bytes() < 9:
+			return {}
+		var id := _get_str(b)
+		if id == "":
+			return {}
+		entries.append([id, int(b.get_u32())])
+	return {"ShopList": {"entries": entries}}
+
+
+static func _dec_inventory_update(b: StreamPeerBuffer) -> Dictionary:
+	if b.get_available_bytes() < 20:
+		return {}
+	var pid := int(b.get_u32())
+	var item_id := _get_str(b)
+	if item_id == "":
+		return {}
+	var count := int(b.get_u64())
+	if count > 0x7fffffffffffffff:  # i64 raw -> GDScript int (two's complement)
+		count -= 0x10000000000000000
+	return {"InventoryUpdate": {"pid": pid, "item_id": item_id, "count": count}}
+
+
+static func _dec_trade_error(b: StreamPeerBuffer) -> Dictionary:
+	if b.get_available_bytes() < 8:
+		return {}
+	var pid := int(b.get_u32())
+	var reason := _get_str(b)
+	if reason == "":
+		return {}
+	return {"TradeError": {"pid": pid, "reason": reason}}

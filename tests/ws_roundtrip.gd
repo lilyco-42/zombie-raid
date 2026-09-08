@@ -118,6 +118,32 @@ func _run() -> void:
 	if not mgr.mirrored.is_empty():
 		_check("mirror has a real id", int(mgr.mirrored[0][0]) > 0)
 
+	# ---- shop roundtrip (raid active): list + zero-balance rejection -----
+	var shop_seen: Array = []
+	net.shop_received.connect(func(entries): shop_seen.append(entries))
+	net.send_request_shop()
+	waited = 0.0
+	while shop_seen.is_empty() and waited < 5.0:
+		await create_timer(0.2).timeout
+		waited += 0.2
+	_check("ShopList roundtrip", not shop_seen.is_empty()
+		and shop_seen[0].size() >= 2)
+	var has_bandage := false
+	for e in (shop_seen[0] if not shop_seen.is_empty() else []):
+		if e[0] == "bandage":
+			has_bandage = true
+	_check("shop lists bandage", has_bandage)
+
+	var err_seen: Array = []
+	net.trade_error.connect(func(reason): err_seen.append(reason))
+	net.send_buy_item("bandage")
+	waited = 0.0
+	while err_seen.is_empty() and waited < 5.0:
+		await create_timer(0.2).timeout
+		waited += 0.2
+	_check("zero-balance buy rejected", err_seen.size() == 1
+		and String(err_seen[0]).contains("insufficient"))
+
 	# a hit report must parse on the server (unknown id -> silently ignored,
 	# but the JSON shape has to decode without a "bad message" log line)
 	net.send_hit_zombie(9999, 10.0)
@@ -130,6 +156,15 @@ func _run() -> void:
 		await create_timer(0.2).timeout
 		waited += 0.2
 	_check("RaidFailed roundtrip", failed_flag.v)
+
+	# the same purchase now answers "raid is over" (second TradeError path)
+	net.send_buy_item("bandage")
+	waited = 0.0
+	while err_seen.size() < 2 and waited < 5.0:
+		await create_timer(0.2).timeout
+		waited += 0.2
+	_check("buy after raid over rejected", err_seen.size() == 2
+		and String(err_seen[1]).contains("raid is over"))
 
 	# ---- session lifecycle: rejoin starts raid #2 on a fresh seed ---------
 	net.leave()

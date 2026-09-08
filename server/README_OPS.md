@@ -31,7 +31,7 @@
 - [x] **T2** 内容表骨架 `server/content/{zombies,items,raid}.toml` — 1:1 复刻现行为（数值 = world.rs 现有常量），items 表含商店字段（价格/可购/限时）作为商业化根基
 - [x] **T3** `protocol::content` 加载器 + 校验器（schema 合法 / ID 唯一 / 数值范围 / 引用存在）+ 单元测试
 - [x] **T4** World 接入内容表（验证标准：现有 16 个测试**一行不改**全绿 = 对拍通过）
-- [ ] **T5** 商店与库存协议：`C2S::{BuyItem, RequestShop}` + `S2C::{ShopList, InventoryUpdate, TradeError}` + GDScript `net_codec.gd` 编解码分支 + 新黄金字节测试（**协议变更**）
+- [x] **T5** 商店与库存协议：`C2S::{BuyItem, RequestShop}` + `S2C::{ShopList, InventoryUpdate, TradeError}` + GDScript `net_codec.gd` 编解码分支 + 新黄金字节测试（**协议变更**）— 服务端权威账本 `inventory: HashMap<pid, HashMap<item, i64>>`，击杀掉落记给 last hitter；所有失败回 TradeError（raid is over / unknown item / not for sale / insufficient coins）
 - [ ] **T6** 玩家数据 SQLite：rusqlite(bundled) + 自写编号迁移器（`schema_migrations` 表，第一天就有）+ `PlayerRepo` trait 隔离（10 年可换 PostgreSQL）；表：`players` / `inventory(pid,item_id,count)` / `purchases` 流水
 - [ ] **T7** 内容热载：`RwLock<Arc<ContentTables>>` 快照交换 + 管理端点重载（不停机换表）
 - [ ] **T8** `docs/SERVER_DEV.md` 新增 §11 内容运营与商业化章；联动素材 SOP（改表→校验→CI 对拍→热载）
@@ -46,4 +46,4 @@
 6. 服务端模拟保持纯函数内核：内容表数据进、S2C 出，无隐藏全局状态。
 
 ---
-状态：T1-T4 完成（2026-09-09，cargo 35 全绿，同 seed 对拍通过）；T5-T8 由自动化循环按序推进，全部完成后此行更新为「✅ 看板清空」。
+状态：T1-T5 完成（2026-09-09，cargo 47 全绿 = protocol 24 含 5 新黄金 + server-bin 23 含 7 商店；test_ws_codec 32 断言；e2e ws_roundtrip 15 项含商店回环）。T6-T8 由自动化循环按序推进，全部完成后此行更新为「✅ 看板清空」。
