@@ -7,6 +7,7 @@ const AvatarScript := preload("res://game/scripts/player_avatar.gd")
 const DungeonBuilderScript := preload("res://game/scripts/dungeon_builder.gd")
 const TouchControlsScript := preload("res://game/scripts/touch_controls.gd")
 const ShopMenuScript := preload("res://game/scripts/shop_menu.gd")
+const GreatWallScript := preload("res://game/scripts/greatwall_perimeter.gd")
 
 @onready var player: CharacterBody3D = $PlayerInstance
 @onready var manager: Node = $Manager
@@ -30,6 +31,13 @@ func _ready() -> void:
 	builder.set_script(CityBuilderScript)
 	add_child(builder)
 	var info: Dictionary = builder.build(self)
+
+	# 中式渐变第一层: 城市外围长城 rampart (必须在导航烘焙前落位)
+	var greatwall := Node.new()
+	greatwall.name = "GreatWall"
+	greatwall.set_script(GreatWallScript)
+	add_child(greatwall)
+	greatwall.build(self)
 
 	var dungeon_builder := Node.new()
 	dungeon_builder.name = "DungeonBuilder"
