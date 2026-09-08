@@ -28,6 +28,9 @@ const MAX_HIT_DAMAGE := 80.0    # damage clamp on client hit reports
 const MAX_HIT_RANGE := 80.0     # distance clamp shooter -> zombie
 
 const RemoteAvatarScript := preload("res://game/scripts/remote_avatar.gd")
+# Link-layer is swappable (docs/SERVER_DEV.md §6 step ①): ENet today,
+# WsTransport (Rust server) plugs in here without touching rpc_* call sites.
+const TransportScript := preload("res://game/scripts/net_transport_enet.gd")
 
 var online := false
 var hosting := false
@@ -36,6 +39,7 @@ var raid_seed := -1             # seed of the currently built world (both sides)
 var pending_seed := -1          # client: seed to apply on next world load
 var pending_elapsed := 0.0      # client: raid clock to restore when joining late
 var world: Node3D               # registered by world_raid._ready
+var _transport = null           # NetTransport instance while online
 
 var _next_net_id := 1
 var _tick_acc := 0.0            # fixed-tick accumulator (server only)
@@ -57,11 +61,12 @@ func _ready() -> void:
 # ---------------------------------------------------------------- lobby ---
 
 func host_game() -> bool:
-	var peer := ENetMultiplayerPeer.new()
-	var err := peer.create_server(PORT, MAX_PEERS)
+	_transport = TransportScript.new()
+	var err: int = _transport.start_host(PORT, MAX_PEERS)
 	if err != OK:
+		_transport = null
 		return false
-	multiplayer.multiplayer_peer = peer
+	_transport.attach(self)
 	online = true
 	hosting = true
 	_next_net_id = 1

@@ -1,0 +1,16 @@
+[package]
+name = "server-bin"
+version = "0.1.0"
+edition = "2021"
+description = "zombie-raid authoritative dedicated server (step 2/3 skeleton: WS entry + 20 TPS tick)"
+
+[dependencies]
+protocol = { path = "../protocol" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+serde_json = "1"
+
+[[bin]]
+name = "zraid-server"
+path = "src/main.rs"
