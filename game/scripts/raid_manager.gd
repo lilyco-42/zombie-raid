@@ -114,7 +114,7 @@ func _setup_facility(dungeon: Dictionary) -> void:
 		var pos: Vector3 = cell
 		if pos.distance_to(dungeon["entrance"]) < CELL_CLEARANCE:
 			continue
-		_spawn_loot_box(pos + Vector3(randf_range(-1.5, 1.5), 0, randf_range(-1.5, 1.5)), 90 + randi() % 80, SCRAP_TINT)
+		_spawn_relic(pos + Vector3(randf_range(-1.5, 1.5), 0, randf_range(-1.5, 1.5)), 90 + randi() % 80)
 		spawned += 1
 	# A few residents already inside
 	var zombies_placed := 0
@@ -337,6 +337,17 @@ func _spawn_medkit(pos: Vector3) -> void:
 	var box := Area3D.new()
 	box.set_script(LootBoxScript)
 	box.kind = "medkit"
+	world.add_child(box)
+	box.global_position = Vector3(pos.x, 0.0, pos.z)
+	box.collected.connect(_on_loot_collected)
+
+func _spawn_relic(pos: Vector3, value: int) -> void:
+	## 中式旧物 (暖水瓶/搪瓷缸/铁皮罐头/粮票捆): 设施深处的"被遗忘的生活",
+	## 数值对齐原 scrap 档 (90-170), 模型在 loot_box 内随机抽。
+	var box := Area3D.new()
+	box.set_script(LootBoxScript)
+	box.kind = "relic"
+	box.loot_value = value
 	world.add_child(box)
 	box.global_position = Vector3(pos.x, 0.0, pos.z)
 	box.collected.connect(_on_loot_collected)

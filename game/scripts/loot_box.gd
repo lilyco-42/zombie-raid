@@ -6,8 +6,15 @@ signal collected(loot_value: int, box: Area3D)
 
 const MODEL_LOOT := "res://assets/kaykit/city/box_A.gltf"
 const MODEL_MEDKIT := "res://assets/kaykit/city/box_B.gltf"
+## 中式旧物废料线 (设施高价值 scrap): 每次生成随机抽一件
+const RELIC_MODELS: Array[String] = [
+	"res://assets/static/vendor/chinese/thermos_bottle.glb",
+	"res://assets/static/vendor/chinese/enamel_mug.glb",
+	"res://assets/static/vendor/chinese/tin_can.glb",
+	"res://assets/static/vendor/chinese/ration_bundle.glb",
+]
 
-@export_enum("loot", "medkit") var kind: String = "loot"
+@export_enum("loot", "medkit", "relic") var kind: String = "loot"
 @export var loot_value: int = 50
 @export var heal_amount: float = 40.0
 @export var tint_color := Color(1, 1, 1)  # optional albedo tint (amber = facility scrap)
@@ -25,7 +32,11 @@ func _ready() -> void:
 	cs.shape = sh
 	cs.position.y = 0.8
 	add_child(cs)
-	var model_file := MODEL_MEDKIT if kind == "medkit" else MODEL_LOOT
+	var model_file := MODEL_LOOT
+	if kind == "relic":
+		model_file = RELIC_MODELS[randi() % RELIC_MODELS.size()]
+	elif kind == "medkit":
+		model_file = MODEL_MEDKIT
 	if ResourceLoader.exists(model_file):
 		_model = (load(model_file) as PackedScene).instantiate()
 		add_child(_model)
