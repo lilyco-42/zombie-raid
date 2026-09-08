@@ -6,6 +6,9 @@ extends CharacterBody3D
 
 enum State { SPAWNING, WANDER, CHASE, ATTACK, DEAD }
 
+const ChineseJiangshiScript := preload("res://game/scripts/chinese_jiangshi.gd")
+const JIANGSHI_CHANCE := 0.35   # Walker 变清朝僵尸的概率 (名字哈希, 联机双端一致)
+
 const AGGRO_RANGE := 20.0
 const DEAGGRO_RANGE := 34.0
 const ATTACK_RANGE := 2.0
@@ -15,6 +18,7 @@ const WANDER_RADIUS := 9.0
 
 @export var max_health: float = 60.0
 @export var model_path: String = ""          # empty = keep the scene's default Minion model
+@export var jiangshi := false    # 强制清朝僵尸; false 时 Walker 按名字哈希自动变身 (Round 49)
 @export var body_height := 1.7
 @export var walk_speed := 1.7
 @export var run_speed := 4.0
@@ -28,6 +32,7 @@ var health: float
 var home_position: Vector3
 var net_id := 0                # >0 once the host registers this zombie online
 var ztype := 0                 # 0..2 = VARIANTS index, 3 = spitter (mirrored on clients)
+var jiangshi_parts := 0        # 挂上的中式配件数 (探针/调试用)
 var _has_net := false
 var _net_buf: Array = []       # snapshot ring: {seq, pos, yaw, code} (MC-style)
 var _wander_timer := 0.0
@@ -49,6 +54,10 @@ func _ready() -> void:
 	anim = model.get_node_or_null("AnimationPlayer")
 	_normalize_model_scale()
 	_tint_model_undead()
+	if not jiangshi and ztype == 1:
+		jiangshi = _auto_jiangshi(name)
+	if jiangshi:
+		jiangshi_parts = ChineseJiangshiScript.dress(self)
 	if anim:
 		for looped in ["Idle", "Walking_A", "Running_A", "2H_Melee_Idle"]:
 			var a := anim.get_animation(looped)
@@ -365,6 +374,12 @@ func _die() -> void:
 	died.emit(global_position)
 
 # --- Model helpers ---
+func _auto_jiangshi(zname: String) -> bool:
+	## 用名字哈希决定是否变清朝僵尸: 联机时名字 = "Z_<net_id>", host/client 同名同哈希,
+	## 外观同步零连线开销; 单机时是引擎自动名, 逐只不同 (有随机感, 且每局可复现)。
+	return fposmod(float(hash(zname)), 1.0) < JIANGSHI_CHANCE
+
+
 func _apply_model() -> void:
 	# Variants swap the skeleton model at spawn time (Rogue/Minion/Warrior GLBs)
 	if model_path.is_empty():
