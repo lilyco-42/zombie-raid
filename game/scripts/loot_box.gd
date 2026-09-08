@@ -17,6 +17,11 @@ const RELIC_MODELS: Array[String] = [
 	"res://assets/static/vendor/chinese/work_badge.glb",
 	"res://assets/static/vendor/chinese/half_jade.glb",
 	"res://assets/static/vendor/chinese/old_radio.glb",
+	# 第三批: 算盘 / 煤油灯 / 搪瓷痰盂 / 留声机
+	"res://assets/static/vendor/chinese/abacus.glb",
+	"res://assets/static/vendor/chinese/kerosene_lamp.glb",
+	"res://assets/static/vendor/chinese/enamel_spittoon.glb",
+	"res://assets/static/vendor/chinese/gramophone.glb",
 ]
 
 @export_enum("loot", "medkit", "relic") var kind: String = "loot"

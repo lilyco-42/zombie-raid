@@ -13,3 +13,6 @@ mono_crash.*.json
 
 # WorkBuddy agent state
 .agents/
+
+# Python bytecode (import build_chinese 等触发)
+__pycache__/
