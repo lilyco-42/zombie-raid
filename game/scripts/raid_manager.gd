@@ -405,8 +405,8 @@ func _spawn_medkit(pos: Vector3) -> void:
 	box.collected.connect(_on_loot_collected)
 
 func _spawn_relic(pos: Vector3, value: int) -> void:
-	## 中式旧物 (暖水瓶/搪瓷缸/铁皮罐头/粮票捆): 设施深处的"被遗忘的生活",
-	## 数值对齐原 scrap 档 (90-170), 模型在 loot_box 内随机抽。
+	## 中式旧物 (暖水瓶/搪瓷缸/铁皮罐头/粮票捆/家书/工牌/半玉佩/老收音机):
+	## 设施深处的"被遗忘的生活", 数值对齐原 scrap 档 (90-170), 模型在 loot_box 内随机抽。
 	var box := Area3D.new()
 	box.set_script(LootBoxScript)
 	box.kind = "relic"
