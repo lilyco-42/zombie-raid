@@ -184,3 +184,7 @@ Sfx="*res://game/scripts/sfx.gd"
 
 pointing/emulate_touch_from_mouse=true
 pointing/emulate_mouse_from_touch=false
+
+[gui]
+
+theme/custom_font="res://assets/fonts/noto_sc_subset.otf"

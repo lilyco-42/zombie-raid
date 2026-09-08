@@ -22,7 +22,7 @@ func _ready() -> void:
 	var avatar: Node3D = AvatarScript.new()
 	avatar.name = "PlayerAvatar"
 	player.add_child(avatar)
-	if DisplayServer.is_touchscreen_available():
+	if _wants_touch_controls():
 		var touch := CanvasLayer.new()
 		touch.name = "TouchControls"
 		touch.set_script(TouchControlsScript)
@@ -103,6 +103,19 @@ func _show_tutorial() -> void:
 func _enable_pointer_lock() -> void:
 	if pointer_lock:
 		pointer_lock.call("set_enabled", true)
+
+func _wants_touch_controls() -> bool:
+	## 触屏笔记本/桌面浏览器的 navigator 也会报"有触摸屏"(maxTouchPoints>0),
+	## 但它们有键鼠。只有"触摸 + 无精细指针"的移动端才启用虚拟按钮。
+	if not DisplayServer.is_touchscreen_available():
+		return false
+	if OS.has_feature("web"):
+		var fine = JavaScriptBridge.eval("window.matchMedia('(pointer: fine)').matches", true)
+		if fine == null:
+			return false  # JS 不可用 -> 按桌面处理
+		return String(fine) != "true"
+	return OS.has_feature("mobile")
+
 
 func _seed_spawn_points(block_centers: Array) -> void:
 	var spots := block_centers.duplicate()
