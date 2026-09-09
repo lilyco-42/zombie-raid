@@ -31,6 +31,12 @@ pub trait PlayerRepo: Send + Sync {
     /// dup-exploits forensics and support tickets answerable in year 10.
     fn record_purchase(&self, pid: u32, item_id: &str, price: i64, coins_before: i64);
     fn purchases(&self, pid: u32) -> Vec<(String, i64, i64)>; // (item, price, coins_before)
+    /// Find the account row for a device token (README_OPS.md T9).
+    /// None = token never seen; World then calls `register`.
+    fn auth(&self, token: &str) -> Option<(u32, String)>;
+    /// Auth-or-create: returns the existing (uid, name) for `token` or
+    /// inserts a new row with an auto "survivor#NNNN" name. Idempotent.
+    fn register(&self, token: &str) -> (u32, String);
 }
 
 /// Numbered migrations. ONLY APPEND — editing a released entry breaks
@@ -50,6 +56,14 @@ const MIGRATIONS: &[&str] = &[
         price        INTEGER NOT NULL,
         coins_before INTEGER NOT NULL,
         applied_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+    );",
+    // 002: account identity (README_OPS.md T9) — device-token accounts,
+    // name auto-assigned ("survivor#NNNN") after INSERT OR IGNORE.
+    "CREATE TABLE players (
+        uid        INTEGER PRIMARY KEY AUTOINCREMENT,
+        token      TEXT    NOT NULL UNIQUE,
+        name       TEXT    NOT NULL DEFAULT '',
+        created_at TEXT    NOT NULL DEFAULT (datetime('now'))
     );",
 ];
 
@@ -167,6 +181,45 @@ impl PlayerRepo for SqlitePlayerRepo {
             Err(_) => Vec::new(),
         }
     }
+
+    fn auth(&self, token: &str) -> Option<(u32, String)> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT uid, name FROM players WHERE token = ?1",
+            [token],
+            |r| Ok((r.get::<_, u32>(0)?, r.get::<_, String>(1)?)),
+        )
+        .ok()
+    }
+
+    fn register(&self, token: &str) -> (u32, String) {
+        let conn = self.conn.lock().unwrap();
+        // INSERT OR IGNORE makes this idempotent: a re-join with the same
+        // device token finds its row instead of duplicating it.
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO players(token) VALUES(?1)",
+            [token],
+        );
+        let uid: u32 = conn
+            .query_row("SELECT uid FROM players WHERE token = ?1", [token], |r| r.get(0))
+            .unwrap_or(0);
+        // lazily backfill the display name once the uid exists
+        let name: String = match conn
+            .query_row("SELECT name FROM players WHERE uid = ?1", [uid], |r| {
+                r.get::<_, String>(0)
+            }) {
+            Ok(n) if !n.is_empty() => n,
+            _ => {
+                let auto = format!("survivor#{uid:04}");
+                let _ = conn.execute(
+                    "UPDATE players SET name = ?1 WHERE uid = ?2",
+                    rusqlite::params![auto, uid],
+                );
+                auto
+            }
+        };
+        (uid, name)
+    }
 }
 
 #[cfg(test)]
@@ -228,5 +281,31 @@ mod tests {
             ]
         );
         assert!(repo.purchases(4).is_empty(), "per-pid isolation");
+    }
+}
+
+#[cfg(test)]
+mod account_tests {
+    use super::*;
+
+    #[test]
+    fn register_is_idempotent_per_token() {
+        let repo = SqlitePlayerRepo::in_memory().unwrap();
+        let (uid1, name1) = repo.register("device-token-a");
+        let (uid2, name2) = repo.register("device-token-a");
+        assert_eq!(uid1, uid2, "same token -> same account");
+        assert_eq!(name1, name2);
+        assert_eq!(name1, "survivor#0001");
+        assert_eq!(repo.auth("device-token-a"), Some((uid1, name1)));
+        assert_eq!(repo.auth("never-seen"), None);
+    }
+
+    #[test]
+    fn register_assigns_distinct_uids_and_names() {
+        let repo = SqlitePlayerRepo::in_memory().unwrap();
+        let (a, _) = repo.register("tok-a");
+        let (b, _) = repo.register("tok-b");
+        assert_ne!(a, b, "uids never collide");
+        assert_eq!(repo.auth("tok-b"), Some((b, format!("survivor#{b:04}"))));
     }
 }

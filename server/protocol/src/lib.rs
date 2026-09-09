@@ -48,6 +48,18 @@ pub enum C2S {
     BuyItem { pid: u32, item_id: String },
     /// Ask for the shop listing -> S2C::ShopList.
     RequestShop,
+    // ---- account identity (README_OPS.md T9; docs/CLIENT_API.md §账号) -----
+    /// Device-token sign-in (passwordless accounts, commerce MVP). Sent
+    /// any time after Hello; the server finds or creates the player row,
+    /// binds this connection's pid to the uid, merges the persisted
+    /// ledger into the session and answers AuthOk{uid,name,coins} or
+    /// AuthErr{reason}. `token` = client-generated stable GUID. `pid`
+    /// rides on the message like every other C2S (v1 trust model).
+    Auth { pid: u32, token: String },
+    /// Full inventory dump for the signed-in account (bag/warehouse page).
+    /// Requires a prior Auth on this connection. `pid` rides on the
+    /// message like every other C2S (v1 trust model).
+    RequestInventory { pid: u32 },
 }
 
 /// Server -> client messages.
@@ -86,6 +98,18 @@ pub enum S2C {
     InventoryUpdate { pid: u32, item_id: String, count: i64 },
     /// Purchase rejected — `reason` is operator-readable, shop UI shows it.
     TradeError { pid: u32, reason: String },
+    // ---- account identity (README_OPS.md T9) -------------------------------
+    /// Sign-in succeeded: uid is stable across sessions (the ledger key),
+    /// `name` is operator-readable (auto "survivor#NNNN" in v1), coins is
+    /// the persisted balance at sign-in time. InventoryUpdate/TradeError
+    /// frames keep using the connection pid; the mapping lives server-side.
+    AuthOk { uid: u32, name: String, coins: i64 },
+    /// Sign-in rejected (malformed/empty token). The connection stays
+    /// usable unauthenticated (raid works, ledger stays session-only).
+    AuthErr { reason: String },
+    /// Full account inventory — the bag/warehouse page data source.
+    /// Vec<(item_id, count)>; counts are i64 (negative impossible here).
+    InventorySnapshot { entries: Vec<(String, i64)> },
 }
 
 /// One zombie in the 15Hz snapshot.
@@ -404,6 +428,81 @@ mod shop_golden_tests {
                  0x69, 0x6e, 0x73, 0x75, 0x66, 0x66, 0x69, 0x63, 0x69, 0x65,
                  0x6e, 0x74, 0x20, 0x63, 0x6f, 0x69, 0x6e, 0x73],
             "34 bytes"
+        );
+        assert_eq!(bincode::deserialize::<S2C>(&bytes).unwrap(), msg);
+    }
+
+    // ---- account identity golden bytes (README_OPS.md T9) ------------------
+
+    #[test]
+    fn golden_auth_bytes() {
+        let msg = C2S::Auth { pid: 357, token: "abc12345".into() };
+        let bytes = bincode::serialize(&msg).unwrap();
+        assert_eq!(
+            bytes,
+            vec![0x08, 0, 0, 0, 0x65, 0x01, 0, 0,
+                 0x08, 0, 0, 0, 0, 0, 0, 0,
+                 0x61, 0x62, 0x63, 0x31, 0x32, 0x33, 0x34, 0x35],
+            "auth pid=357 token 'abc12345' = 24 bytes"
+        );
+        assert_eq!(bincode::deserialize::<C2S>(&bytes).unwrap(), msg);
+    }
+
+    #[test]
+    fn golden_request_inventory_bytes() {
+        let msg = C2S::RequestInventory { pid: 357 };
+        let bytes = bincode::serialize(&msg).unwrap();
+        assert_eq!(bytes, vec![0x09, 0, 0, 0, 0x65, 0x01, 0, 0], "8 bytes");
+        assert_eq!(bincode::deserialize::<C2S>(&bytes).unwrap(), msg);
+    }
+
+    #[test]
+    fn golden_auth_ok_bytes() {
+        let msg = S2C::AuthOk { uid: 1, name: "survivor#0001".into(), coins: 1250 };
+        let bytes = bincode::serialize(&msg).unwrap();
+        assert_eq!(
+            bytes,
+            vec![0x0c, 0, 0, 0, 0x01, 0, 0, 0,
+                 0x0d, 0, 0, 0, 0, 0, 0, 0,
+                 0x73, 0x75, 0x72, 0x76, 0x69, 0x76, 0x6f, 0x72,
+                 0x23, 0x30, 0x30, 0x30, 0x31,
+                 0xe2, 0x04, 0, 0, 0, 0, 0, 0],
+            "uid=1 name='survivor#0001' coins=1250 = 37 bytes"
+        );
+        assert_eq!(bincode::deserialize::<S2C>(&bytes).unwrap(), msg);
+    }
+
+    #[test]
+    fn golden_auth_err_bytes() {
+        let msg = S2C::AuthErr { reason: "invalid token".into() };
+        let bytes = bincode::serialize(&msg).unwrap();
+        assert_eq!(
+            bytes,
+            vec![0x0d, 0, 0, 0,
+                 0x0d, 0, 0, 0, 0, 0, 0, 0,
+                 0x69, 0x6e, 0x76, 0x61, 0x6c, 0x69, 0x64, 0x20,
+                 0x74, 0x6f, 0x6b, 0x65, 0x6e],
+            "25 bytes"
+        );
+        assert_eq!(bincode::deserialize::<S2C>(&bytes).unwrap(), msg);
+    }
+
+    #[test]
+    fn golden_inventory_snapshot_bytes() {
+        let msg = S2C::InventorySnapshot {
+            entries: vec![("coin".into(), 1250), ("bandage".into(), 2)],
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        assert_eq!(
+            bytes,
+            vec![0x0e, 0, 0, 0,
+                 0x02, 0, 0, 0, 0, 0, 0, 0,
+                 0x04, 0, 0, 0, 0, 0, 0, 0, 0x63, 0x6f, 0x69, 0x6e,
+                 0xe2, 0x04, 0, 0, 0, 0, 0, 0,
+                 0x07, 0, 0, 0, 0, 0, 0, 0, 0x62, 0x61, 0x6e, 0x64,
+                 0x61, 0x67, 0x65,
+                 0x02, 0, 0, 0, 0, 0, 0, 0],
+            "two entries ('coin',1250) ('bandage',2) = 47 bytes"
         );
         assert_eq!(bincode::deserialize::<S2C>(&bytes).unwrap(), msg);
     }

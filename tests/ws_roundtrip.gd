@@ -144,6 +144,28 @@ func _run() -> void:
 	_check("zero-balance buy rejected", err_seen.size() == 1
 		and String(err_seen[0]).contains("insufficient"))
 
+	# ---- account roundtrip (T9/T10): device-token sign-in + bag dump -----
+	var auth_oks: Array = []
+	net.auth_ok.connect(func(uid, name, coins): auth_oks.append([uid, name, coins]))
+	net.send_auth("e2e-account-token")
+	waited = 0.0
+	while auth_oks.is_empty() and waited < 5.0:
+		await create_timer(0.2).timeout
+		waited += 0.2
+	_check("AuthOk roundtrip", not auth_oks.is_empty()
+		and int(auth_oks[0][0]) > 0
+		and String(auth_oks[0][1]).begins_with("survivor#"))
+
+	var snaps: Array = []
+	net.inventory_snapshot.connect(func(entries): snaps.append(entries))
+	net.send_request_inventory()
+	waited = 0.0
+	while snaps.is_empty() and waited < 5.0:
+		await create_timer(0.2).timeout
+		waited += 0.2
+	_check("InventorySnapshot roundtrip", not snaps.is_empty()
+		and not snaps[0].is_empty())
+
 	# a hit report must parse on the server (unknown id -> silently ignored,
 	# but the JSON shape has to decode without a "bad message" log line)
 	net.send_hit_zombie(9999, 10.0)

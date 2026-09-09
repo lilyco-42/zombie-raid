@@ -415,5 +415,81 @@ func _run() -> void:
 		and inv_seen == [[7, "coin", 1250]]
 		and err_seen == ["insufficient coins"])
 
+	# G1-G7: account identity — same golden bytes as the Rust auth tests
+	# (README_OPS.md T9/T10; docs/CLIENT_API.md §账号)
+	# G1: encode Auth pid=357 token "abc12345" -> 24 bytes
+	var golden_auth := PackedByteArray([0x08, 0, 0, 0, 0x65, 0x01, 0, 0,
+		0x08, 0, 0, 0, 0, 0, 0, 0,
+		0x61, 0x62, 0x63, 0x31, 0x32, 0x33, 0x34, 0x35])
+	_check("G1 encode golden Auth",
+		NetCodec.encode_c2s({"Auth": {"pid": 357, "token": "abc12345"}}) == golden_auth)
+
+	# G2: encode RequestInventory pid=357 -> 8 bytes
+	var golden_req_inv := PackedByteArray([0x09, 0, 0, 0, 0x65, 0x01, 0, 0])
+	_check("G2 encode golden RequestInventory",
+		NetCodec.encode_c2s({"RequestInventory": {"pid": 357}}) == golden_req_inv)
+
+	# G3: decode golden AuthOk uid=1 "survivor#0001" coins=1250 (37 bytes)
+	var golden_auth_ok := PackedByteArray([0x0c, 0, 0, 0, 0x01, 0, 0, 0,
+		0x0d, 0, 0, 0, 0, 0, 0, 0,
+		0x73, 0x75, 0x72, 0x76, 0x69, 0x76, 0x6f, 0x72,
+		0x23, 0x30, 0x30, 0x30, 0x31,
+		0xe2, 0x04, 0, 0, 0, 0, 0, 0])
+	var dec_ao: Dictionary = NetCodec.decode_s2c(golden_auth_ok)
+	_check("G3 decode golden AuthOk", dec_ao.size() == 1
+		and dec_ao.has("AuthOk")
+		and int(dec_ao["AuthOk"]["uid"]) == 1
+		and dec_ao["AuthOk"]["name"] == "survivor#0001"
+		and int(dec_ao["AuthOk"]["coins"]) == 1250)
+
+	# G4: decode golden AuthErr "invalid token" (25 bytes)
+	var golden_auth_err := PackedByteArray([0x0d, 0, 0, 0,
+		0x0d, 0, 0, 0, 0, 0, 0, 0,
+		0x69, 0x6e, 0x76, 0x61, 0x6c, 0x69, 0x64, 0x20,
+		0x74, 0x6f, 0x6b, 0x65, 0x6e])
+	var dec_ae: Dictionary = NetCodec.decode_s2c(golden_auth_err)
+	_check("G4 decode golden AuthErr", dec_ae.size() == 1
+		and dec_ae.has("AuthErr")
+		and dec_ae["AuthErr"]["reason"] == "invalid token")
+
+	# G5: decode golden InventorySnapshot [coin 1250, bandage 2] (47 bytes)
+	var golden_snap := PackedByteArray([0x0e, 0, 0, 0,
+		0x02, 0, 0, 0, 0, 0, 0, 0,
+		0x04, 0, 0, 0, 0, 0, 0, 0, 0x63, 0x6f, 0x69, 0x6e,
+		0xe2, 0x04, 0, 0, 0, 0, 0, 0,
+		0x07, 0, 0, 0, 0, 0, 0, 0, 0x62, 0x61, 0x6e, 0x64,
+		0x61, 0x67, 0x65,
+		0x02, 0, 0, 0, 0, 0, 0, 0])
+	var dec_snap: Dictionary = NetCodec.decode_s2c(golden_snap)
+	_check("G5 decode golden InventorySnapshot", dec_snap.size() == 1
+		and dec_snap.has("InventorySnapshot")
+		and dec_snap["InventorySnapshot"]["entries"] == [["coin", 1250], ["bandage", 2]])
+
+	# G6: account send wrappers route through the binary pump
+	var t5 = _make_script(TRANSPORTSTUB_SRC).new()
+	net._transport = t5
+	net._ws_mode = true
+	net._ws_binary = true
+	net._ws_pid = 357
+	net.send_auth("abc12345")
+	net.send_request_inventory()
+	_check("G6 account sends emit codec bytes", t5.sent_bytes.size() == 2
+		and t5.sent_bytes[0] == golden_auth
+		and t5.sent_bytes[1] == golden_req_inv)
+
+	# G7: dispatch of the three account S2Cs through the real net.gd signals
+	var auth_oks: Array = []
+	var auth_errs: Array = []
+	var snapshots: Array = []
+	net.auth_ok.connect(func(uid, name, coins): auth_oks.append([uid, name, coins]))
+	net.auth_error.connect(func(reason): auth_errs.append(reason))
+	net.inventory_snapshot.connect(func(entries): snapshots.append(entries))
+	net._dispatch_s2c("AuthOk", {"uid": 1, "name": "survivor#0001", "coins": 1250})
+	net._dispatch_s2c("AuthErr", {"reason": "invalid token"})
+	net._dispatch_s2c("InventorySnapshot", {"entries": [["coin", 1250], ["bandage", 2]]})
+	_check("G7 account dispatches fire signals", auth_oks == [[1, "survivor#0001", 1250]]
+		and auth_errs == ["invalid token"]
+		and snapshots == [[["coin", 1250], ["bandage", 2]]])
+
 	print("ws codec test done: %s" % ("ALL PASS" if fails == 0 else "%d FAILED" % fails))
 	quit(1 if fails > 0 else 0)

@@ -19,6 +19,8 @@ const C2S_REPORT_EXTRACT := 4
 const C2S_REPORT_PLAYER_DIED := 5
 const C2S_BUY_ITEM := 6
 const C2S_REQUEST_SHOP := 7
+const C2S_AUTH := 8
+const C2S_REQUEST_INVENTORY := 9
 
 # S2C variant indices = declaration order in protocol::S2C
 const S2C_SEED := 0
@@ -33,6 +35,9 @@ const S2C_DAMAGE_PLAYER := 8
 const S2C_SHOP_LIST := 9
 const S2C_INVENTORY_UPDATE := 10
 const S2C_TRADE_ERROR := 11
+const S2C_AUTH_OK := 12
+const S2C_AUTH_ERR := 13
+const S2C_INVENTORY_SNAPSHOT := 14
 
 # ZombieEnt wire size: u32 id + 3×f32 pos + f32 yaw + u8 anim + u8 ztype
 const ENT_SIZE := 22
@@ -70,6 +75,10 @@ static func encode_c2s(msg: Dictionary) -> PackedByteArray:
 				return _enc_buy_item(msg[variant])
 			"RequestShop":
 				return _enc_request_shop()
+			"Auth":
+				return _enc_auth(msg[variant])
+			"RequestInventory":
+				return _enc_request_inventory(msg[variant])
 	push_error("[netcodec] unknown C2S variant in %s" % [msg])
 	return PackedByteArray()
 
@@ -132,6 +141,21 @@ static func _enc_request_shop() -> PackedByteArray:
 	return b.data_array
 
 
+static func _enc_auth(d: Dictionary) -> PackedByteArray:
+	var b := _buf()
+	b.put_u32(C2S_AUTH)
+	b.put_u32(int(d["pid"]))
+	_put_str(b, String(d["token"]))
+	return b.data_array
+
+
+static func _enc_request_inventory(d: Dictionary) -> PackedByteArray:
+	var b := _buf()
+	b.put_u32(C2S_REQUEST_INVENTORY)
+	b.put_u32(int(d["pid"]))
+	return b.data_array
+
+
 ## bincode legacy strings: u64 little-endian length + raw UTF-8 bytes
 ## (StreamPeer's own put_utf8_string uses a u16 prefix - do NOT use it).
 static func _put_str(b: StreamPeerBuffer, s: String) -> void:
@@ -180,6 +204,12 @@ static func decode_s2c(bytes: PackedByteArray) -> Dictionary:
 			return _dec_inventory_update(b)
 		S2C_TRADE_ERROR:
 			return _dec_trade_error(b)
+		S2C_AUTH_OK:
+			return _dec_auth_ok(b)
+		S2C_AUTH_ERR:
+			return _dec_auth_err(b)
+		S2C_INVENTORY_SNAPSHOT:
+			return _dec_inventory_snapshot(b)
 	return {}
 
 
@@ -298,3 +328,41 @@ static func _dec_trade_error(b: StreamPeerBuffer) -> Dictionary:
 	if reason == "":
 		return {}
 	return {"TradeError": {"pid": pid, "reason": reason}}
+
+
+static func _dec_auth_ok(b: StreamPeerBuffer) -> Dictionary:
+	if b.get_available_bytes() < 12:
+		return {}
+	var uid := int(b.get_u32())
+	var name := _get_str(b)
+	if name == "":
+		return {}
+	var coins := int(b.get_u64())
+	return {"AuthOk": {"uid": uid, "name": name, "coins": coins}}
+
+
+static func _dec_auth_err(b: StreamPeerBuffer) -> Dictionary:
+	if b.get_available_bytes() < 8:
+		return {}
+	var reason := _get_str(b)
+	if reason == "":
+		return {}
+	return {"AuthErr": {"reason": reason}}
+
+
+static func _dec_inventory_snapshot(b: StreamPeerBuffer) -> Dictionary:
+	if b.get_available_bytes() < 8:
+		return {}
+	var n := int(b.get_u64())
+	if n > 4096:
+		return {}
+	var entries: Array = []
+	for i in n:
+		if b.get_available_bytes() < 9:
+			return {}
+		var id := _get_str(b)
+		if id == "":
+			return {}
+		# get_u64 reinterprets the bit pattern = i64 two's complement
+		entries.append([id, int(b.get_u64())])
+	return {"InventorySnapshot": {"entries": entries}}

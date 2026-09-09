@@ -240,11 +240,13 @@ async fn dispatch(
     }
 }
 
-/// A client's pid rides on its state/hit reports; the first one claims the
-/// connection identity for disconnect cleanup.
+/// A client's pid rides on its state/hit/auth reports; the first one
+/// claims the connection identity for disconnect cleanup.
 fn claim_pid(c2s: &C2S) -> Option<u32> {
     match c2s {
-        C2S::PlayerState { pid, .. } | C2S::HitZombie { pid, .. } => Some(*pid),
+        C2S::PlayerState { pid, .. } | C2S::HitZombie { pid, .. } | C2S::Auth { pid, .. } => {
+            Some(*pid)
+        }
         _ => None,
     }
 }

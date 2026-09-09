@@ -29,6 +29,9 @@ pub const RAMP_SECONDS: f32 = 360.0;
 pub const MIN_SPAWN_DIST: f32 = 18.0;
 pub const RUN_LIMIT: f32 = 480.0; // seconds until the moon leaves -> frenzy
 pub const FRENZY_GRACE: f32 = 90.0; // after RUN_LIMIT the run is lost
+/// Signup bonus for a brand-new account (README_OPS.md T9 onboarding
+/// economy): enough to buy the cheapest purchasable item immediately.
+pub const SIGNUP_BONUS: i64 = 200;
 
 // ---- hit validation (net.gd MAX_HIT_*) ----------------------------------
 pub const MAX_HIT_RATE: f32 = 20.0;
@@ -97,6 +100,11 @@ pub struct World {
     /// Drop credits and purchases land here; every mutation is also
     /// written through to `repo` when one is attached (T6, main.rs).
     inventory: HashMap<u32, HashMap<String, i64>>,
+    /// Connection pid -> account uid (README_OPS.md T9). Unauthenticated
+    /// pids have no entry and their ledger stays session-only (repo keys
+    /// fall back to the raw pid). Survives raid resets: the mapping is a
+    /// property of the connection, not of the raid.
+    session_uid: HashMap<u32, u32>,
     /// Persistence seam (README_OPS.md T6). None in most unit tests
     /// (in-memory ledger only); main.rs attaches a SQLite repo.
     pub repo: Option<std::sync::Arc<dyn PlayerRepo>>,
@@ -146,6 +154,7 @@ impl World {
             netstate_acc: 0.0,
             content,
             inventory: HashMap::new(),
+            session_uid: HashMap::new(),
             repo,
             store: None,
         }
@@ -192,9 +201,11 @@ impl World {
     pub fn reset(&mut self, seed: u64) {
         let repo = self.repo.take();
         let store = self.store.take();
+        let session_uid = std::mem::take(&mut self.session_uid);
         *self = Self::with_content(seed, self.content.clone());
         self.repo = repo; // persistence outlives raids (ledger is not session state)
         self.store = store; // hot-reload registry outlives raids too
+        self.session_uid = session_uid; // identity is per-connection, not per-raid
     }
 
     /// Hello handler. A Hello during a live raid is a no-op (the Seed
@@ -249,10 +260,18 @@ impl World {
         }
         // Write-through (README_OPS.md T6): the ledger must not vanish
         // with the session (invariant 5 — sessions are droppable, the
-        // ledger is not). The repo mirrors the in-memory cleanup rule.
+        // ledger is not). Authenticated connections key the repo by their
+        // stable uid (T9); anonymous ones keep the raw pid (session noise,
+        // never promoted to an account).
         if let Some(repo) = &self.repo {
-            repo.add_item(pid, item_id, delta);
+            let key = self.session_uid.get(&pid).copied().unwrap_or(pid);
+            repo.add_item(key, item_id, delta);
         }
+    }
+
+    /// Repo-side ledger key for `pid` (uid when authenticated, else pid).
+    fn ledger_key(&self, pid: u32) -> u32 {
+        self.session_uid.get(&pid).copied().unwrap_or(pid)
     }
 
     /// C2S::BuyItem - server-authoritative purchase (README_OPS.md T5).
@@ -281,7 +300,7 @@ impl World {
         // audit trail (README_OPS.md T6): every accepted trade lands in
         // purchases so dup-exploit forensics stay answerable in year 10
         if let Some(repo) = &self.repo {
-            repo.record_purchase(pid, item_id, price, coins_before);
+            repo.record_purchase(self.ledger_key(pid), item_id, price, coins_before);
         }
         let coin_bal = self.balance(pid, &coin);
         let bought = self.balance(pid, item_id);
@@ -303,9 +322,69 @@ impl World {
         vec![S2C::ShopList { entries }]
     }
 
+    // ------------------------------------------------- account (T9/T10) --
+    /// C2S::Auth - device-token sign-in. Finds or creates the account
+    /// row, binds pid -> uid, merges the persisted ledger into the
+    /// session (persisted values win — Auth means "restore my account")
+    /// and answers AuthOk{uid,name,coins}. Malformed tokens answer
+    /// AuthErr; the connection stays usable unauthenticated.
+    fn auth(&mut self, pid: u32, token: &str) -> Vec<S2C> {
+        let token = token.trim();
+        if token.is_empty() || token.len() > 64 {
+            return vec![S2C::AuthErr { reason: "invalid token".into() }];
+        }
+        let Some(repo) = self.repo.clone() else {
+            // no persistence attached (unit tests): accept but stay ephemeral
+            return vec![S2C::AuthErr { reason: "persistence unavailable".into() }];
+        };
+        let known = repo.auth(token);
+        let (uid, name) = match &known {
+            Some(found) => found.clone(),
+            None => repo.register(token),
+        };
+        self.session_uid.insert(pid, uid);
+        if known.is_none() {
+            // Brand-new account: signup bonus seeds the first purchase —
+            // onboarding economy: a fresh player gets to feel the shop
+            // loop before their first kill (commercialization first).
+            // TODO: move into raid.toml as an ops-tunable when the UI
+            // needs a "welcome gift" screen.
+            self.add_item(pid, &self.coin_id().to_string(), SIGNUP_BONUS);
+        }
+        // merge persisted inventory under the session pid; persisted
+        // values WIN (this is a restore, not a sum — prevents re-join
+        // dupe loops where session gains would double-count)
+        for (item_id, count) in repo.inventory(uid) {
+            let bag = self.inventory.entry(pid).or_default();
+            bag.insert(item_id, count);
+        }
+        let coin = self.coin_id().to_string();
+        let coins = self.balance(pid, &coin);
+        vec![S2C::AuthOk { uid, name, coins }]
+    }
+
+    /// C2S::RequestInventory - full bag/warehouse dump from the session
+    /// ledger (which the write-through keeps identical to the repo).
+    /// Anonymous connections dump their session-only bag; authenticated
+    /// ones see the restored account inventory.
+    fn request_inventory(&mut self, pid: u32) -> Vec<S2C> {
+        let mut entries: Vec<(String, i64)> = self
+            .inventory
+            .get(&pid)
+            .map(|bag| {
+                bag.iter()
+                    .map(|(k, v)| (k.clone(), *v))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        entries.sort(); // stable shape for UI diffs and golden tests
+        vec![S2C::InventorySnapshot { entries }]
+    }
+
     pub fn retire_player(&mut self, pid: u32) {
         self.players.remove(&pid);
         self.hit_times.remove(&pid);
+        self.session_uid.remove(&pid); // identity dies with the connection
         // Everyone left a raid that actually ran: stop the clock now
         // instead of letting it coast to the 570s team-kill with no audience.
         if self.players.is_empty() && self.raid_active && self.elapsed > 0.0 {
@@ -386,6 +465,8 @@ impl World {
             C2S::Hello { .. } => self.handle_hello(),
             C2S::BuyItem { pid, item_id } => self.buy_item(*pid, item_id),
             C2S::RequestShop => self.shop_list(),
+            C2S::Auth { pid, token } => self.auth(*pid, token),
+            C2S::RequestInventory { pid } => self.request_inventory(*pid),
             C2S::PlayerState { pid, pos, .. } => {
                 self.player_state(*pid, *pos);
                 vec![]
@@ -1188,5 +1269,139 @@ mod hotswap_tests {
             msgs.iter().any(|m| matches!(m, S2C::ZombieDead { .. })),
             "without a store the boot snapshot rules (60hp walker dies)"
         );
+    }
+}
+
+#[cfg(test)]
+mod auth_tests {
+    //! T9/T10: account identity + full inventory dump (docs/CLIENT_API.md).
+
+    use super::*;
+    use crate::player_repo::{PlayerRepo, SqlitePlayerRepo};
+    use protocol::C2S;
+
+    fn make_world() -> (World, std::sync::Arc<SqlitePlayerRepo>) {
+        let repo = std::sync::Arc::new(SqlitePlayerRepo::in_memory().unwrap());
+        let w = World::with_repo(
+            42,
+            std::sync::Arc::new(ContentTables::built_in()),
+            repo.clone(),
+        );
+        (w, repo)
+    }
+
+    fn kill_one(w: &mut World) -> i64 {
+        let id = w.force_spawn(1, [5.0, 0.0, 0.0]);
+        match &w.validate_hit(2, id, 80.0)[..] {
+            [S2C::ZombieDead { drop_value, .. }] => *drop_value as i64,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn auth_ok_binds_pid_and_restores_persisted_balance() {
+        let (mut w, repo) = make_world();
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        let uid = repo.register("tok").0;
+        repo.add_item(uid, "coin", 500);
+
+        let out = w.handle(&C2S::Auth { pid: 2, token: "tok".into() });
+        match &out[..] {
+            [S2C::AuthOk { uid: u, name, coins }] => {
+                assert_eq!(*u, uid);
+                assert_eq!(name, "survivor#0001");
+                assert_eq!(*coins, 500, "AuthOk carries the persisted balance");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(w.balance(2, &w.coin_id()), 500, "session ledger restored");
+
+        // post-auth kill credits the UID key in the repo (not the raw pid)
+        let drop = kill_one(&mut w);
+        assert_eq!(repo.balance(uid, &w.coin_id()), 500 + drop);
+    }
+
+    #[test]
+    fn rejoin_with_same_token_restores_balance() {
+        let (mut w, repo) = make_world();
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        repo.register("tok"); // pre-register: no signup bonus in this test
+        w.handle(&C2S::Auth { pid: 2, token: "tok".into() });
+        let drop = kill_one(&mut w);
+        let coins_after_raid1 = 0 + drop;
+
+        // session 2: fresh World, same repo (server restart simulation)
+        let repo2: std::sync::Arc<dyn PlayerRepo> = repo.clone();
+        let mut w2 = World::with_repo(
+            42,
+            std::sync::Arc::new(ContentTables::built_in()),
+            repo2,
+        );
+        w2.player_state(9, [0.0, 0.0, 0.0]); // different session pid!
+        let out = w2.handle(&C2S::Auth { pid: 9, token: "tok".into() });
+        match &out[..] {
+            [S2C::AuthOk { coins, .. }] => assert_eq!(*coins, coins_after_raid1),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(w2.balance(9, &w2.coin_id()), coins_after_raid1);
+    }
+
+    #[test]
+    fn invalid_token_rejected_connection_stays_usable() {
+        let (mut w, _repo) = make_world();
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        let out = w.handle(&C2S::Auth { pid: 2, token: "  ".into() });
+        assert!(matches!(&out[..], [S2C::AuthErr { reason, .. }] if reason == "invalid token"));
+        // the raid keeps working unauthenticated
+        let drop = kill_one(&mut w);
+        assert_eq!(w.balance(2, &w.coin_id()), drop);
+    }
+
+    #[test]
+    fn signup_bonus_seeds_the_first_purchase() {
+        let (mut w, repo) = make_world();
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        let out = w.handle(&C2S::Auth { pid: 2, token: "brand-new".into() });
+        let coins = match &out[..] {
+            [S2C::AuthOk { coins, .. }] => *coins,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(coins, SIGNUP_BONUS, "fresh account starts with the bonus");
+        // the bonus must cover the cheapest purchasable item
+        let bandage_price = w.content.item("bandage").unwrap().shop.price as i64;
+        assert!(coins >= bandage_price, "onboarding economy: first buy reachable");
+        // and the purchase actually succeeds right after sign-in
+        let out = w.handle(&C2S::BuyItem { pid: 2, item_id: "bandage".into() });
+        assert!(
+            matches!(&out[..],
+                [S2C::InventoryUpdate { .. }, S2C::InventoryUpdate { .. }]),
+            "new player can complete a purchase before their first kill"
+        );
+        assert_eq!(repo.balance(repo.auth("brand-new").unwrap().0, "bandage"), 1);
+    }
+
+    #[test]
+    fn request_inventory_lists_sorted_session_ledger() {
+        let (mut w, repo) = make_world();
+        w.player_state(2, [0.0, 0.0, 0.0]);
+        repo.register("tok"); // pre-register: no signup bonus in this test
+        w.handle(&C2S::Auth { pid: 2, token: "tok".into() });
+        w.add_item(2, "bandage", 1);
+        w.add_item(2, &w.coin_id().to_string(), 77);
+
+        let out = w.handle(&C2S::RequestInventory { pid: 2 });
+        match &out[..] {
+            [S2C::InventorySnapshot { entries }] => {
+                assert_eq!(
+                    entries,
+                    &vec![
+                        ("bandage".to_string(), 1),
+                        ("coin".to_string(), 77),
+                    ],
+                    "sorted by item_id, full bag"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

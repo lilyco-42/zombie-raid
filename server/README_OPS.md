@@ -47,3 +47,14 @@
 
 ---
 状态：✅ 看板清空（2026-09-09，T1-T8 全部完成）。cargo 60 全绿 = protocol 24 + server-bin 36；test_ws_codec 32 断言；e2e ws_roundtrip 16 项含商店回环与管理端点实测。运营入口：§热载 SOP（SERVER_DEV.md §11.4）/ 联动 SOP（§11.5）；管理端口 127.0.0.1:24566（reload/status）。下一步候选：账号系统与稳定身份（激活跨会话库存恢复）、purchases 消耗链路、CI 内容表对拍流水线。
+
+## 第二阶段看板（商业化 · 客户端对接，UI 侧契约见 docs/CLIENT_API.md）
+
+- [x] **T9** 账号身份协议：`C2S::Auth{pid,token}` + `S2C::{AuthOk{uid,name,coins}, AuthErr}`（判别值 8/12/13）+ players 表迁移 002（设备 token 免密账号，auth-or-create 幂等）+ 注册奖励 200 coin（onboarding economy：新玩家首杀前就能完成一次购买）+ 账本键写穿映射 pid→uid（**协议变更**）
+- [x] **T10** 库存全量查询：`C2S::RequestInventory{pid}` + `S2C::InventorySnapshot{entries}`（判别值 9/14，按 item_id 排序）——背包/仓库页数据源
+- [x] **T11** `docs/CLIENT_API.md` 客户端接口文档：C2S 0-9 / S2C 0-14 全字段、UI 分页映射（游戏/账号/商店/背包）、错误语义表、外观 skins 与通行证 battle pass 占位形状、UI 自检清单
+- [ ] **T12** 外观 skins：内容表 `kind="skin"` 行 + `EquipSkin` 协议 + 购买链路复用（**协议变更**）
+- [ ] **T13** 通行证 battle pass：`pass.toml` 内容表 + `RequestPass/PassState` 协议 + 领取链路（**协议变更**）
+- [ ] **T14** CI 内容表对拍流水线（GitHub Actions：cargo test + godot headless 双侧对拍）
+
+状态（二阶段）：T9-T11 完成（2026-09-09，cargo 72 全绿 = protocol 29 + server-bin 43；codec G1-G7；e2e 18 项含账号/快照回环）。T12-T14 按序推进。

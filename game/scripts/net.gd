@@ -26,6 +26,9 @@ signal seed_received
 signal shop_received(entries: Array)
 signal inventory_update(pid: int, item_id: String, count: int)
 signal trade_error(reason: String)
+signal auth_ok(uid: int, name: String, coins: int)
+signal auth_error(reason: String)
+signal inventory_snapshot(entries: Array)
 
 const PORT := 24565
 const MAX_PEERS := 3            # + host = 4 players
@@ -348,6 +351,12 @@ func _dispatch_s2c(variant: String, d: Variant) -> void:
 			inventory_update.emit(int(d["pid"]), String(d["item_id"]), int(d["count"]))
 		"TradeError":
 			trade_error.emit(String(d["reason"]))
+		"AuthOk":
+			auth_ok.emit(int(d["uid"]), String(d["name"]), int(d["coins"]))
+		"AuthErr":
+			auth_error.emit(String(d["reason"]))
+		"InventorySnapshot":
+			inventory_snapshot.emit(d["entries"])
 		_:
 			print("[net] unknown S2C variant: %s" % variant)
 
@@ -417,6 +426,20 @@ func send_request_shop() -> void:
 		return
 	if _ws_mode:
 		_ws_send({"RequestShop": null})
+
+# ---- T9/T10 account: device-token sign-in + full bag dump (WS-only) ----
+
+func send_auth(token: String) -> void:
+	if not online:
+		return
+	if _ws_mode:
+		_ws_send({"Auth": {"pid": _ws_pid, "token": token}})
+
+func send_request_inventory() -> void:
+	if not online:
+		return
+	if _ws_mode:
+		_ws_send({"RequestInventory": {"pid": _ws_pid}})
 
 # ------------------------------------------------------------- avatars ----
 
