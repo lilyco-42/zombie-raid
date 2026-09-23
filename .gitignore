@@ -19,3 +19,4 @@ __pycache__/
 
 # Player database (runtime state, never versioned)
 /data/
+*.pyc
